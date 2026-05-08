@@ -1,0 +1,70 @@
+# Vivado / Vitis
+*.jou
+*.log
+*.runs/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.sim/
+*.xpr
+*.strwe
+*.data/
+*.bit
+*.ltx
+*.mcs
+*.prm
+*.bin
+Xilinx/
+.vitis/
+.sdk/
+
+# Vivado temp
+*.backup.jou
+*.backup.log
+webtalk*.jou
+webtalk*.log
+usage_statistics_webtalk.*
+vivado_*
+.hbs
+
+# Vitis temp
+RemoteSystemsTempFiles/
+.settings/
+Debug/
+Release/
+*.elf
+*.elf.size
+*.map
+
+# .NET / Visual Studio
+bin/
+obj/
+*.user
+*.suo
+*.vs/
+*.DotSettings
+*.sln.DotSettings.user
+*.cache
+TestResults/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+~$*
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# Archives
+*.zip
+*.tar.gz
+*.7z
+
+# Private
+.env
+secrets.*
