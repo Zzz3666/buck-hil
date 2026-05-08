@@ -309,30 +309,53 @@ assign pwm_active = (pwm_counter < duty_threshold);
 
 ## 2.4 DAC 接口 (`dac_interface`)
 
-### 2.4.1 AD5686 特性
+### 2.4.1 DAC80508 特性
 
 | 参数 | 值 |
 |------|-----|
 | 分辨率 | 16 bit |
-| 通道数 | 4 |
-| 接口 | SPI (3线/4线) |
+| 通道数 | 8 |
+| 接口 | SPI (3线), CS + SCLK + SDI |
 | 最大 SCLK | 50 MHz |
-| 输出范围 | 0 ~ 2.5V (内部基准) |
+| 输出范围 | 0~5V (内部 REF=2.5V, gain=2 模式) |
 | 建立时间 | 5 μs (typ) |
-| 命令格式 | 24-bit: {4-bit CMD, 4-bit ADDR, 16-bit DATA} |
+| INL | ±1 LSB max |
+| 内置输出缓冲 | 是 (±15mA) |
+| 帧格式 | **32-bit**: {8-bit CMD, 8-bit ADDR, 16-bit DATA} |
+| 更新模式 | LDAC 低有效同步更新 (可接 GND 设自动更新) |
 
-### 2.4.2 SPI 命令
+### 2.4.2 SPI 命令格式
+
+DAC80508 使用 32-bit SPI 帧，不同于 AD5686 的 24-bit：
 
 ```
-WRITE_TO_INPUT_REG:   CMD = 0001
-UPDATE_DAC:           CMD = 0010
-WRITE_AND_UPDATE:     CMD = 0011
+┌──────────┬──────────┬──────────────────┐
+│ CMD (8b) │ ADDR (8b)│ DATA (16b,大端)   │
+│ [31:24]  │ [23:16]  │ [15:0]            │
+└──────────┴──────────┴──────────────────┘
+
+写 DAC 通道 N:
+  CMD  = 0x80 | (N << 4)  或直接: 0x08 + N (寄存器地址)
+  ADDR = 0x00 (don't care during write)
+  DATA = 16-bit DAC code
+
+例: 写 VOUT0 = 0x8000 (半量程 = 2.5V)
+  SPI 帧 = {0x08, 0x00, 0x80, 0x00}
+           ^DAC0   ^addr  ^DATA_H ^DATA_L
+
+单次传输: 32 cycles @ 50MHz = 640 ns
+2 通道更新: 2 × 640 ns = 1.28 μs (vs AD5686: 2 × 480 ns = 960 ns)
 ```
 
-单次 DAC 更新时序（WRITE_AND_UPDATE, Channel A）:
-```
-24-bit 帧: 0011_0000_D15_D14_..._D0 = 24 cycles @ 50MHz ≈ 480 ns
-```
+与 AD5686 对比:
+
+| 项目 | AD5686 (旧) | DAC80508 (新) |
+|------|:-----------:|:------------:|
+| 帧长 | 24-bit | 32-bit |
+| 帧组成 | 4 CMD + 4 ADDR + 16 DATA | 8 CMD + 8 ADDR + 16 DATA |
+| 单次传输 @50MHz | 480 ns | 640 ns |
+| 2ch 更新时间 | 960 ns | 1.28 μs |
+| DAC 数据寄存器地址 | 0x0~0x3 (ch0~3) | 0x08~0x0F (ch0~7) |
 
 ### 2.4.3 模块接口
 
@@ -344,16 +367,23 @@ module dac_interface #(
     input  wire        rst_n,
 
     // 数据输入 (来自求解器)
-    input  wire [15:0] ch0_data,      // Vout (已量化为 0~65535 → 0~2.5V)
+    // DAC80508 输出 0~5V, 增益×2.4 → 12V
+    // DAC code = Vout / 12.0 * 65535 * (5/12) ... 见电压缩放
+    input  wire [15:0] ch0_data,      // Vout (DAC code for 0~5V output)
     input  wire [15:0] ch1_data,      // I_L
     input  wire [15:0] ch2_data,      // 预留
     input  wire [15:0] ch3_data,      // 预留
+    input  wire [15:0] ch4_data,      // 预留
+    input  wire [15:0] ch5_data,      // 预留
+    input  wire [15:0] ch6_data,      // 预留
+    input  wire [15:0] ch7_data,      // 预留
     input  wire        update_strobe, // 更新触发 (每 5~10 求解步长一次)
 
     // SPI 物理接口
     output wire        spi_sclk,
-    output wire        spi_mosi,
-    output wire        spi_cs_n    // 低有效
+    output wire        spi_sdi,     // DAC80508 用 SDI (非 MOSI)
+    output wire        spi_cs_n,    // 低有效
+    output wire        spi_ldac_n   // 低有效同步更新 (可固定接 GND)
 );
 ```
 
@@ -366,23 +396,16 @@ module dac_interface #(
               │ update_strobe
               ▼
          ┌─────────┐
-         │ CH0_TX  │ ── 发送 24-bit CH0 数据
+         │ CH0_TX  │ ── 发送 32-bit CH0 数据: {0x08, 0x00, DATA_H, DATA_L}
          └────┬────┘
               │
               ▼
          ┌─────────┐
-         │ CH1_TX  │ ── 发送 24-bit CH1 数据
+         │ CH1_TX  │ ── 发送 32-bit CH1 数据: {0x09, 0x00, DATA_H, DATA_L}
          └────┬────┘
               │
               ▼
-         ┌─────────┐
-         │ CH2_TX  │ ── 预留
-         └────┬────┘
-              │
-              ▼
-         ┌─────────┐
-         │ CH3_TX  │ ── 预留
-         └────┬────┘
+         .......  (CH2~CH7 预留，通过寄存器使能跳过)
               │
               ▼
          ┌─────────┐
@@ -393,21 +416,39 @@ module dac_interface #(
            [IDLE]
 ```
 
+32-bit 帧时序与 24-bit 的区别: 每个通道多发 8 个 bit (1 字节)，状态机的 bit 计数器从 24 改为 32。
+
 ### 2.4.5 电压缩放
 
-求解器输出的 `v_C` 是 Q16.16 格式的实际电压值。DAC 输入需要 16-bit 无符号数（0~65535 → 0~2.5V）。
+求解器输出的 `v_C` 是 Q16.16 格式的实际电压值。DAC80508 输出 0~5V (gain=2 模式)，经运放 ×2.4 → 0~12V。
 
-```verilog
-// 电压缩放: Vout (Q16.16) → DAC code
-// 假设 Vout 范围 0~12V, DAC 输出 0~2.5V (后经运放放大 ×4.8 得到 0~12V)
-// DAC code = Vout / 12.0 * 65535  （Q16.16 除法）
-// 简化: Vout_Q16 * 65535 / (12 << 16)
+```
+Vout (0~12V) → DAC code (0~65535 → 0~5V):
+  DAC code = Vout / 12.0 * (65535 / 2.4)           // 或:
+  DAC code = Vout / 5.0 * 65535                     // 更直接: DAC 直接输出 0~5V
+  DAC code = Vout_Q16 * 65535 / (5 << 16)           // 定点: Vout_Q16 >> 16 * 65535 / 5
 
-wire [47:0] scale_product = v_out[31:0] * 48'd65535;  // 48-bit 乘法
-wire [15:0] dac_code_vout = scale_product[47:16] / 12; // 除以 12（取整近似）
+预计算缩放因子 (PS 端写入寄存器):
+  dac_scale_vout = (65535.0 / 5.0) 的 Q16.16  →  0x000CCCCC (≈ 13107)
+  PL 端: dac_code = (v_out[31:16] * dac_scale) >> 16
+
+// Verilog:
+wire [31:0] scale_product = v_out[31:16] * DAC_SCALE_REG;  // 16b × 16b = 32b
+wire [15:0] dac_code_vout = scale_product[31:16];           // 取高 16 位
 ```
 
-实际实现用预计算的缩放因子寄存器避免运行时除法。
+### 2.4.6 DAC80508 初始化
+
+上电后需通过 SPI 配置寄存器：
+
+| 步骤 | 操作 | SPI 帧 | 说明 |
+|------|------|--------|------|
+| 1 | 复位 DAC | {0x0A, 0x00, 0x00, 0x01} | 写 SYNC 寄存器 bit0=1 触发软复位 |
+| 2 | 配置 gain=2 | {0x04, 0x00, 0x00, 0x01} | 写 GAIN 寄存器: ch0 gain=2 |
+| 3 | 配置 ch1 gain=2 | {0x04, 0x01, 0x00, 0x01} | 写 GAIN 寄存器: ch1 gain=2 |
+| 4 | 使能内部 REF | {0x03, 0x00, 0x00, 0x01} | 写 CONFIG 寄存器: REF_EN=1 |
+
+初始化由 PS 端在启动时通过 AXI-Lite 寄存器触发，PL 内部状态机自动完成 4 步配置序列。
 
 ---
 
@@ -474,15 +515,16 @@ set_clock_groups -asynchronous \
 set_property PACKAGE_PIN TBD [get_ports pwm_in]
 set_property IOSTANDARD LVCMOS33 [get_ports pwm_in]
 
-# DAC SPI (3.3V LVCMOS)
+# DAC SPI (3.3V LVCMOS) — DAC80508
 set_property PACKAGE_PIN TBD [get_ports dac_sclk]
-set_property PACKAGE_PIN TBD [get_ports dac_mosi]
+set_property PACKAGE_PIN TBD [get_ports dac_sdi]
 set_property PACKAGE_PIN TBD [get_ports dac_cs_n]
-set_property IOSTANDARD LVCMOS33 [get_ports {dac_sclk dac_mosi dac_cs_n}]
+set_property PACKAGE_PIN TBD [get_ports dac_ldac_n]
+set_property IOSTANDARD LVCMOS33 [get_ports {dac_sclk dac_sdi dac_cs_n dac_ldac_n}]
 
 # 输出延迟约束 (DAC SPI)
-set_output_delay -clock [get_clocks clk_pl_100] -max 2.0 [get_ports {dac_sclk dac_mosi dac_cs_n}]
-set_output_delay -clock [get_clocks clk_pl_100] -min 1.0 [get_ports {dac_sclk dac_mosi dac_cs_n}]
+set_output_delay -clock [get_clocks clk_pl_100] -max 2.0 [get_ports {dac_sclk dac_sdi dac_cs_n dac_ldac_n}]
+set_output_delay -clock [get_clocks clk_pl_100] -min 1.0 [get_ports {dac_sclk dac_sdi dac_cs_n dac_ldac_n}]
 
 # 输入延迟约束 (PWM)
 set_input_delay -clock [get_clocks clk_pl_400] -max 2.0 [get_ports pwm_in]

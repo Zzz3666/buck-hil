@@ -18,7 +18,7 @@
 | 开关频率 | 200 kHz | 用户指定 |
 | 仿真步长 | 100 ns | 设计决策（开关周期 1/50） |
 | FPGA | Xilinx ZU3EG (XCZU3EG-1SFVC784I) | 用户已有硬件 |
-| DAC | AD5686 (16-bit, 4-ch, SPI) | 设计选型 |
+| DAC | DAC80508 (16-bit, 8-ch, SPI 32-bit, 0~5V out, ±1LSB INL, 5μs settling) | 设计选型 (替换 AD5686) |
 | 模型类型 | 开关状态模型 (Switched-State, 非平均值) | 设计决策 |
 | 离散化 | 前向欧拉 | 设计决策（100ns 步长下误差 < 0.1%） |
 | PL 时钟 | 400MHz (捕获) / 100MHz (求解) | 设计决策 |
@@ -136,7 +136,7 @@ SW=OFF: di_L/dt = (-Vf - Vout - i_L*R_L) / L
 
 ```
 PWM_IN → pwm_capture(400MHz) → duty_q16 → buck_solver(100MHz) → v_C, i_L
-                                                                    ├→ dac_interface → AD5686 → 模拟前端 → DUT
+                                                                    ├→ dac_interface(32b SPI) → DAC80508 → 模拟前端(G×2.4) → DUT
                                                                     └→ capture_mgr(BRAM) → DMA → PS DDR → TCP → Host
 ```
 
@@ -159,7 +159,7 @@ PWM_IN → pwm_capture(400MHz) → duty_q16 → buck_solver(100MHz) → v_C, i_L
 | 求解器发散 | i_L 下界钳位 (≥0), v_C 下界钳位 |
 | TCP 粘包/半包 | 逐字节状态机，不依赖 Read 边界 |
 | 模拟前端地回路 | 单点接地，AGND/DGND 经 0Ω |
-| ZU3EG 电源纹波 → DAC | 独立 LDO (LP5907) 给 AD5686 |
+| ZU3EG 电源纹波 → DAC | 独立 LDO (LP5907-5.0) 给 DAC80508 AVDD |
 
 ## 上位机技术栈（Qt）
 

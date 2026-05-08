@@ -16,7 +16,7 @@
 | 仿真步长 | 100 ns |
 | FPGA 平台 | Xilinx ZU3EG (Zynq UltraScale+) |
 | 模型类型 | 开关状态模型 (Switched-State) |
-| 接口 | PWM 捕获 (400MHz 定时器) + DAC 输出 (16-bit AD5686) |
+| 接口 | PWM 捕获 (400MHz 定时器) + DAC 输出 (16-bit DAC80508, 8ch) |
 | 通信 | TCP/IP (1Gbps Ethernet), 自定义二进制帧协议 + CRC16 |
 | 上位机 | Qt 6 (C++), QCustomPlot, CMake |
 
@@ -41,7 +41,7 @@
 │  │  PL (可编程逻辑)                                 │     │
 │  │  • PWM 捕获 (400MHz 计数器)                     │     │
 │  │  • Buck 求解器 (100ns 步长, 定点 Q16.16)        │     │
-│  │  • DAC 接口 (SPI → AD5686)                      │     │
+│  │  • DAC 接口 (SPI 32-bit → DAC80508)                │     │
 │  │  • 数据捕获 (8K 环形缓冲, 硬件触发)              │     │
 │  └──────────────────────┬──────────────────────────┘     │
 │                         │ DAC SPI                         │
@@ -126,7 +126,7 @@ buck-hil/
 - **FPGA**: Vivado 2024.1+ (支持 ZU3EG)
 - **PS**: Vitis IDE 2024.1+ (Baremetal 工具链)
 - **上位机**: Qt 6.5+, CMake 3.20+, C++17 编译器 (GCC 11+/Clang 14+/MSVC 2022+)
-- **外部硬件**: AD5686 DAC 模块, 运放调理板
+- **外部硬件**: DAC80508 DAC 模块, 运放调理板
 
 ### 构建步骤
 
