@@ -1,690 +1,822 @@
-# 5. 上位机软件设计 (C# / WPF)
+# 5. 上位机软件设计 (Qt 6 / C++)
 
 ## 5.1 技术选型
 
 | 组件 | 选择 | 理由 |
 |------|------|------|
-| UI 框架 | WPF (Windows Presentation Foundation) | 数据绑定成熟，渲染性能好 |
-| .NET 版本 | .NET 8.0 | LTS 版本，性能提升显著 |
-| 图表库 | OxyPlot.Wpf | 轻量，支持高速刷新，MIT 协议 |
-| 通信 | System.Net.Sockets (原生) | 零依赖，完全控制 |
-| 数据存储 | System.IO + BinaryWriter | 环形缓冲，预分配，零 GC |
-| 日志 | Serilog | 结构化日志，支持文件/控制台 |
-| 配置 | appsettings.json | 标准 .NET 配置 |
+| UI 框架 | Qt 6.5+ (Widgets) | 跨平台成熟稳定，原生 C++ 无运行时依赖 |
+| 图形库 | QCustomPlot 2.1+ | 轻量（两个文件），高速刷新，BSD 协议 |
+| 网络 | QTcpSocket (异步) | Qt 原生异步 socket，天然配合事件循环 |
+| 线程 | QThread + 信号槽 | QueuedConnection 自动跨线程安全，无需手写锁 |
+| 数据存储 | QFile + QDataStream | 异步 I/O，二进制紧凑格式 |
+| 日志 | qInstallMessageHandler | 自带，重定向到文件 |
+| 配置 | QSettings (INI) | 跨平台，零依赖 |
+| 构建 | CMake 3.20+ | 跨平台，Vivado/Vitis 生态也认 |
 
-## 5.2 线程模型 (铁律)
+## 5.2 线程模型（铁律）
+
+三个 QObject 各住一个线程，用信号槽 QueuedConnection 通信，**UI 线程零阻塞**。
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Main Thread (UI Thread)                      │
-│  Dispatcher Priority = Normal                                    │
-│                                                                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────┐   │
-│  │MainWindow│  │波形控件   │  │参数面板   │  │状态指示器      │   │
-│  │.xaml     │  │OxyPlot   │  │TextBox   │  │StatusBar      │   │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └───────┬───────┘   │
-│       │              │              │               │            │
-│  ┌────┴──────────────┴──────────────┴───────────────┴────┐      │
-│  │             DataBinding (INotifyPropertyChanged)       │      │
-│  │             绝不直接调用 Socket, 文件 I/O, 锁           │      │
-│  └──────────────────────────┬────────────────────────────┘      │
-│                             │                                    │
-│   DispatcherTimer (33ms) ───┤ 定时从 Model 拉取最新数据到 UI     │
-│                             │                                    │
-└─────────────────────────────┼────────────────────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              │               │               │
-              ▼               ▼               ▼
-    ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-    │ConcurrentQueue│ │ConcurrentQueue│ │BlockingColl.│
-    │<CmdMessage>  │ │<StatusUpdate>│ │<DataChunk>  │
-    └──────┬──────┘  └──────┬──────┘  └──────┬──────┘
-           │                │                │
-┌──────────┴────────────────┴────────────────┴────────────────────┐
-│                  Communication Thread (Background)                │
-│  Thread Priority = AboveNormal                                   │
-│                                                                  │
-│  ┌───────────────┐  ┌────────────────┐  ┌───────────────────┐   │
-│  │ TcpClient     │  │ FrameParser    │  │ RecvLoop (async)  │   │
-│  │ Connect/Reconn│  │ State Machine  │  │ while(true)       │   │
-│  └───────┬───────┘  └───────┬────────┘  └─────────┬─────────┘   │
-│          │                  │                      │              │
-│          │         ┌────────┴────────┐             │              │
-│          │         │ 完整帧 → 分发    │◄────────────┘              │
-│          │         │ CMD 路由        │                            │
-│          │         └────────┬────────┘                            │
-│          │                  │                                     │
-│          │    ┌─────────────┼─────────────┐                      │
-│          │    ▼             ▼             ▼                      │
-│          │ [响应→UI队列] [数据→环形缓冲] [心跳检测]               │
-│          │                                                        │
-│   绝不：操作 UI 控件, 调用 Dispatcher.Invoke (同步阻塞)            │
-└──────────┴───────────────────────────────────────────────────────┘
-                              │
-                              │ BlockingCollection<DataChunk>
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│               Data Processing Thread (Background)                 │
-│                                                                  │
-│  • 环形缓冲管理 (预分配 10M samples, 零动态分配)                   │
-│  • 触发数据重组 (SEQ# 排序, 缺失检测)                             │
-│  • 降采样 (用于长期显示)                                          │
-│  • 文件存储 (异步 FileStream.WriteAsync)                          │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                  Main Thread (GUI Thread)                         │
+│  QApplication::exec() 事件循环                                    │
+│                                                                   │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌─────────────┐   │
+│  │MainWindow │  │QCustomPlot│  │ParamPanel │  │StatusBar    │   │
+│  │.ui        │  │波形控件    │  │QLineEdit  │  │QLabel       │   │
+│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └──────┬──────┘   │
+│        │              │              │               │           │
+│  ┌─────┴──────────────┴──────────────┴───────────────┴─────┐    │
+│  │           QTimer (33ms) → updatePlot()                  │    │
+│  │           从 DataProcessor 拉取最新数据到 QCustomPlot     │    │
+│  │           绝不：socket->read()、文件 I/O、sleep()         │    │
+│  └───────────────────────────┬─────────────────────────────┘    │
+│                              │                                   │
+│   emit sendCommand(cmd, payload)  ──(QueuedConnection)──►        │
+│   emit startStream()               ──(QueuedConnection)──►        │
+│                              │                                   │
+└──────────────────────────────┼───────────────────────────────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+       QueuedConnection  QueuedConnection  QueuedConnection
+              │                │                │
+              ▼                ▼                ▼
+┌──────────────────────┐ ┌──────────────────────────────────────┐
+│  CommWorker          │ │  DataProcessor (QThread)              │
+│  (QThread)           │ │                                       │
+│                      │ │  • RingBuffer<double> 管理             │
+│  ┌────────────────┐  │ │  • 触发数据重组 (SEQ排序)              │
+│  │ QTcpSocket     │  │ │  • 文件存储 (QFile)                    │
+│  │ 异步连接/重连   │  │ │  • 降采样 (长期显示)                  │
+│  └───────┬────────┘  │ └───────────────┬──────────────────────┘ │
+│          │           │                 │                         │
+│  ┌───────┴────────┐  │    QueuedConnection                      │
+│  │ FrameParser    │  │                 │                         │
+│  │ 逐字节解析      │──┼──► newDataReady(Vout, IL)                │
+│  │ 状态机         │  │                 │                         │
+│  └───────┬────────┘  │                 ▼                         │
+│          │           │         [RingBuffer<double>]              │
+│    frameReady()      │         [RingBuffer<double>]              │
+│    → 按CMD分发:      │         [FileStorage]                     │
+│    • 0x10→emit      │                                           │
+│      paramResp      │                                           │
+│    • 0x11→emit      │                                           │
+│      trigData       │                                           │
+│    • 0x12→emit      │                                           │
+│      streamData     │                                           │
+│                      │                                           │
+│  绝不: UI操作、      │                                           │
+│  阻塞式 waitFor*()   │                                           │
+└──────────────────────┘                                           │
+```
+
+### 信号连接拓扑
+
+```
+MainWindow                 CommWorker                  DataProcessor
+    │                          │                            │
+    │──sendCommand()──────────►│                            │
+    │                          │──paramResp()─────────────►│
+    │                          │                            │
+    │◄──statusChanged()────────│                            │
+    │◄──connectionError()──────│                            │
+    │                          │                            │
+    │                          │──trigData()───────────────►│
+    │                          │──streamData()─────────────►│
+    │                          │                            │
+    │◄──plotDataReady()────────┼────────────────────────────│
+    │◄──triggerReady()─────────┼────────────────────────────│
+    │                          │                            │
+    │──startStream()──────────►│                            │
+    │──stopStream()───────────►│                            │
+    │──armTrigger()───────────►│                            │
 ```
 
 ## 5.3 关键类设计
 
 ### 5.3.1 FrameParser — 帧解析状态机
 
-```csharp
-/// <summary>
-/// 逐字节帧解析器，线程安全，支持粘包/半包。
-/// 与 PS 端协议状态机完全对称。
-/// </summary>
-public class FrameParser
+```cpp
+// FrameParser.h
+#pragma once
+#include <QObject>
+#include <QByteArray>
+#include <cstdint>
+#include <functional>
+
+struct Frame {
+    uint8_t  cmd;
+    QByteArray payload;
+
+    bool isValid() const { return cmd != 0xFF; }
+    QByteArray serialize() const;  // 计算 CRC16 并组装完整帧
+};
+
+class FrameParser : public QObject
 {
-    private enum State { Sync1, Sync2, Cmd, LenH, LenL, Payload, CrcH, CrcL, Tail }
+    Q_OBJECT
+public:
+    explicit FrameParser(QObject *parent = nullptr);
 
-    private State _state = State.Sync1;
-    private byte _cmd;
-    private ushort _len;
-    private ushort _payloadIdx;
-    private byte[] _payload = new byte[65536];
-    private ushort _crcCalculated;
-    private ushort _crcReceived;
-    private long _lastByteTicks;
+    /// 逐字节喂入，内部维护状态机。
+    /// 解析到完整帧后发射 frameReady 信号。
+    void feedByte(uint8_t byte);
+    void feedBytes(const QByteArray &data);
 
-    private const ushort CRC16_POLY = 0x1021;
-    private const int FRAME_TIMEOUT_MS = 500;
+signals:
+    void frameReady(Frame frame);
 
-    /// <summary>
-    /// 每收到一个字节调用一次。
-    /// 返回 null 表示继续等待，返回 Frame 对象表示完整帧已解析。
-    /// </summary>
-    public Frame? FeedByte(byte b)
-    {
-        _lastByteTicks = Environment.TickCount64;
+private:
+    enum State { Sync1, Sync2, Cmd, LenH, LenL, Payload, CrcH, CrcL };
+    State m_state = Sync1;
 
-        switch (_state)
-        {
-            case State.Sync1:
-                if (b == 0xAA) _state = State.Sync2;
-                break;
+    uint8_t  m_cmd = 0;
+    uint16_t m_len = 0;
+    uint16_t m_payloadIdx = 0;
+    uint8_t  m_payload[65536]{};
+    uint16_t m_crcCalc = 0;
+    uint16_t m_crcRecv = 0;
 
-            case State.Sync2:
-                if (b == 0x55)
-                {
-                    _state = State.Cmd;
-                    _crcCalculated = Crc16Init();
-                    _crcCalculated = Crc16Update(_crcCalculated, b);
-                }
-                else _state = State.Sync1;
-                break;
+    void reset();
+    static uint16_t crc16Init();
+    static uint16_t crc16Update(uint16_t crc, uint8_t byte);
 
-            case State.Cmd:
-                _cmd = b;
-                _crcCalculated = Crc16Update(_crcCalculated, b);
-                _state = State.LenH;
-                break;
+    static constexpr uint16_t CRC16_POLY = 0x1021;
+};
 
-            case State.LenH:
-                _len = (ushort)(b << 8);
-                _crcCalculated = Crc16Update(_crcCalculated, b);
-                _state = State.LenL;
-                break;
-
-            case State.LenL:
-                _len |= b;
-                _crcCalculated = Crc16Update(_crcCalculated, b);
-                if (_len > 65535) { _state = State.Sync1; return null; }
-                _payloadIdx = 0;
-                _state = _len == 0 ? State.CrcH : State.Payload;
-                break;
-
-            case State.Payload:
-                _payload[_payloadIdx++] = b;
-                _crcCalculated = Crc16Update(_crcCalculated, b);
-                if (_payloadIdx >= _len) _state = State.CrcH;
-                break;
-
-            case State.CrcH:
-                _crcReceived = (ushort)(b << 8);
-                _state = State.CrcL;
-                break;
-
-            case State.CrcL:
-                _crcReceived |= b;
-                _state = State.Tail;
-                break;
-
-            case State.Tail:
-                _state = State.Sync1;
-                if (b == 0x55 && _crcCalculated == _crcReceived)
-                    return new Frame(_cmd, _payload.AsSpan(0, _len).ToArray());
-                break;
+// FrameParser.cpp (关键实现)
+void FrameParser::feedByte(uint8_t byte)
+{
+    switch (m_state) {
+    case Sync1:
+        if (byte == 0xAA) m_state = Sync2;
+        break;
+    case Sync2:
+        if (byte == 0x55) {
+            m_state = Cmd;
+            m_crcCalc = crc16Init();
+            m_crcCalc = crc16Update(m_crcCalc, byte);
+        } else {
+            m_state = Sync1;
         }
-
-        // 超时保护
-        if (Environment.TickCount64 - _lastByteTicks > FRAME_TIMEOUT_MS)
-            _state = State.Sync1;
-
-        return null;
-    }
-
-    public void FeedBytes(ReadOnlySpan<byte> bytes)
-    {
-        foreach (byte b in bytes)
-        {
-            var frame = FeedByte(b);
-            if (frame.HasValue)
-                OnFrameReceived?.Invoke(frame.Value);
+        break;
+    case Cmd:
+        m_cmd = byte;
+        m_crcCalc = crc16Update(m_crcCalc, byte);
+        m_state = LenH;
+        break;
+    case LenH:
+        m_len = static_cast<uint16_t>(byte) << 8;
+        m_crcCalc = crc16Update(m_crcCalc, byte);
+        m_state = LenL;
+        break;
+    case LenL:
+        m_len |= byte;
+        m_crcCalc = crc16Update(m_crcCalc, byte);
+        m_payloadIdx = 0;
+        m_state = (m_len == 0) ? CrcH : Payload;
+        break;
+    case Payload:
+        m_payload[m_payloadIdx++] = byte;
+        m_crcCalc = crc16Update(m_crcCalc, byte);
+        if (m_payloadIdx >= m_len) m_state = CrcH;
+        break;
+    case CrcH:
+        m_crcRecv = static_cast<uint16_t>(byte) << 8;
+        m_state = CrcL;
+        break;
+    case CrcL: {
+        m_crcRecv |= byte;
+        // 帧尾 0x55 由调用者在下一字节检查后决定
+        // 这里简化为: CRC 匹配即认为帧有效
+        if (m_crcCalc == m_crcRecv) {
+            QByteArray payload(reinterpret_cast<char*>(m_payload), m_len);
+            emit frameReady(Frame{m_cmd, payload});
         }
+        m_state = Sync1;  // 等待下一个帧尾或下一个帧头
+        break;
     }
+    }
+}
 
-    public event Action<Frame>? OnFrameReceived;
+QByteArray Frame::serialize() const
+{
+    QByteArray frame;
+    frame.append(static_cast<char>(0xAA));
+    frame.append(static_cast<char>(0x55));
+    frame.append(static_cast<char>(cmd));
 
-    private static ushort Crc16Init() => 0xFFFF;
-    private static ushort Crc16Update(ushort crc, byte b)
-    {
-        crc ^= (ushort)(b << 8);
+    uint16_t len = static_cast<uint16_t>(payload.size());
+    frame.append(static_cast<char>(len >> 8));
+    frame.append(static_cast<char>(len & 0xFF));
+
+    // CRC 计算范围: HEAD2 ~ payload 末尾
+    uint16_t crc = 0xFFFF;
+    auto update = [&crc](uint8_t b) {
+        crc ^= static_cast<uint16_t>(b) << 8;
         for (int i = 0; i < 8; i++)
-        {
-            if ((crc & 0x8000) != 0)
-                crc = (ushort)((crc << 1) ^ CRC16_POLY);
-            else
-                crc <<= 1;
-        }
-        return crc;
-    }
+            crc = (crc & 0x8000) ? (crc << 1) ^ 0x1021 : crc << 1;
+    };
+
+    update(0x55);
+    update(cmd);
+    update(len >> 8);
+    update(len & 0xFF);
+    for (auto b : payload) update(static_cast<uint8_t>(b));
+
+    frame.append(static_cast<char>(crc >> 8));
+    frame.append(static_cast<char>(crc & 0xFF));
+    frame.append(static_cast<char>(0x55));
+
+    return frame;
 }
 ```
 
-### 5.3.2 CommunicationThread — 通信线程
+### 5.3.2 CommWorker — 通信线程
 
-```csharp
-public class CommunicationThread : IDisposable
+```cpp
+// CommunicationWorker.h
+#pragma once
+#include <QObject>
+#include <QTcpSocket>
+#include <QTimer>
+#include "FrameParser.h"
+
+class CommWorker : public QObject
 {
-    private readonly FrameParser _parser = new();
-    private TcpClient? _tcp;
-    private NetworkStream? _stream;
-    private CancellationTokenSource? _cts;
-    private Task? _recvTask;
+    Q_OBJECT
+public:
+    explicit CommWorker(QObject *parent = nullptr);
+    ~CommWorker();
 
-    // 输出队列 → UI 线程 / 数据处理线程 (无锁)
-    private readonly ConcurrentQueue<Frame> _responseQueue = new();
-    private readonly BlockingCollection<DataChunk> _dataQueue = new(boundedCapacity: 100);
+public slots:
+    /// 连接到目标 (由 MainWindow 通过 QueuedConnection 调用)
+    void connectToHost(const QString &host, quint16 port);
+    void disconnectFromHost();
 
-    public BlockingCollection<DataChunk> DataQueue => _dataQueue;
-    public ConcurrentQueue<Frame> ResponseQueue => _responseQueue;
+    /// 发送命令帧
+    void sendFrame(Frame frame);
 
-    public event Action<ConnectionState>? ConnectionStateChanged;
+    /// 控制数据流
+    void startStream();
+    void stopStream();
 
-    public async Task ConnectAsync(string host, int port)
-    {
-        while (!_cts!.IsCancellationRequested)
-        {
-            try
-            {
-                _tcp = new TcpClient { NoDelay = true, ReceiveTimeout = 2000 };
-                await _tcp.ConnectAsync(host, port);
-                _stream = _tcp.GetStream();
-                ConnectionStateChanged?.Invoke(ConnectionState.Connected);
+signals:
+    void connected();
+    void disconnected();
+    void connectionError(const QString &error);
 
-                await RecvLoopAsync(_stream, _cts.Token);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "连接失败，3 秒后重试");
-                ConnectionStateChanged?.Invoke(ConnectionState.Disconnected);
-                await Task.Delay(3000, _cts.Token);
-            }
-            finally
-            {
-                _stream?.Dispose();
-                _tcp?.Dispose();
-            }
+    // 解析后的帧 → DataProcessor (QueuedConnection)
+    void paramResponse(uint16_t id, uint32_t value);
+    void triggerData(quint32 seq, QByteArray rawData);
+    void streamData(quint32 seq, QByteArray rawData);
+    void errorEvent(uint8_t code, QString message);
+
+private slots:
+    void onConnected();
+    void onDisconnected();
+    void onReadyRead();
+    void onError(QAbstractSocket::SocketError error);
+    void onReconnectTimer();
+
+private:
+    QTcpSocket  *m_socket;
+    FrameParser  m_parser;
+    QTimer      *m_reconnectTimer;
+    QString      m_host;
+    quint16      m_port;
+    bool         m_intentionalDisconnect = false;
+
+    void dispatchFrame(const Frame &frame);
+};
+
+// CommunicationWorker.cpp (关键)
+void CommWorker::onReadyRead()
+{
+    QByteArray data = m_socket->readAll();
+    m_parser.feedBytes(data);
+}
+
+void CommWorker::dispatchFrame(const Frame &frame)
+{
+    switch (frame.cmd) {
+    case 0x10: { // CMD_PARAM_RESP
+        if (frame.payload.size() >= 6) {
+            uint16_t id = (static_cast<uint8_t>(frame.payload[0]) << 8)
+                        | static_cast<uint8_t>(frame.payload[1]);
+            uint32_t val = (static_cast<uint8_t>(frame.payload[2]) << 24)
+                         | (static_cast<uint8_t>(frame.payload[3]) << 16)
+                         | (static_cast<uint8_t>(frame.payload[4]) << 8)
+                         | static_cast<uint8_t>(frame.payload[5]);
+            emit paramResponse(id, val);
         }
+        break;
     }
-
-    private async Task RecvLoopAsync(NetworkStream stream, CancellationToken ct)
-    {
-        var buffer = new byte[8192];  // 8KB 接收缓冲
-        _parser.OnFrameReceived += frame =>
-        {
-            if (IsResponseFrame(frame.Cmd))
-                _responseQueue.Enqueue(frame);
-            else if (frame.Cmd == 0x11 || frame.Cmd == 0x12)
-                _dataQueue.TryAdd(DataChunk.FromFrame(frame));
-        };
-
-        while (!ct.IsCancellationRequested)
-        {
-            int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, ct);
-            if (bytesRead == 0) break;  // 连接关闭
-
-            _parser.FeedBytes(buffer.AsSpan(0, bytesRead));
+    case 0x11: // CMD_TRIG_DATA
+        emit triggerData(0 /* TODO: extract seq */, frame.payload);
+        break;
+    case 0x12: // CMD_STREAM_DATA
+        emit streamData(0, frame.payload);
+        break;
+    case 0xFF: // CMD_ERROR
+        if (frame.payload.size() >= 2) {
+            emit errorEvent(frame.payload[0],
+                QString::fromUtf8(frame.payload.mid(1)));
         }
+        break;
     }
+}
 
-    public async Task SendFrameAsync(Frame frame)
-    {
-        if (_stream == null) throw new InvalidOperationException("未连接");
+// 连接在 MainWindow 构造时建立
+void MainWindow::setupConnections()
+{
+    // CommWorker → DataProcessor (跨线程，自动 QueuedConnection)
+    connect(m_commWorker, &CommWorker::streamData,
+            m_dataProcessor, &DataProcessor::onStreamData);
+    connect(m_commWorker, &CommWorker::triggerData,
+            m_dataProcessor, &DataProcessor::onTriggerData);
+    connect(m_commWorker, &CommWorker::paramResponse,
+            m_dataProcessor, &DataProcessor::onParamResponse);
 
-        byte[] raw = frame.Serialize();  // 内部计算 CRC 并组装完整帧
-        await _stream.WriteAsync(raw, 0, raw.Length);
-        await _stream.FlushAsync();
-    }
+    // DataProcessor → MainWindow (跨线程)
+    connect(m_dataProcessor, &DataProcessor::plotDataReady,
+            this, &MainWindow::updatePlot);
+    connect(m_dataProcessor, &DataProcessor::triggerReady,
+            this, &MainWindow::onTriggerReady);
 
-    /// <summary>
-    /// 发送命令并等待应答（带超时 + 重试）
-    /// </summary>
-    public async Task<Frame> SendCommandAsync(
-        byte cmd, ReadOnlyMemory<byte> payload,
-        int timeoutMs = 500, int maxRetries = 3)
-    {
-        for (int attempt = 0; attempt < maxRetries; attempt++)
-        {
-            var request = new Frame(cmd, payload.ToArray());
-            await SendFrameAsync(request);
-
-            // 等待应答（基于 SEQ 匹配或简单 FIFO）
-            using var responseCts = new CancellationTokenSource(timeoutMs);
-            try
-            {
-                while (!responseCts.Token.IsCancellationRequested)
-                {
-                    if (_responseQueue.TryDequeue(out var response))
-                        return response;
-
-                    await Task.Delay(1, responseCts.Token);
-                }
-            }
-            catch (OperationCanceledException) { }
-
-            Log.Warning("命令 0x{0:X2} 超时，重试 {1}/{2}", cmd, attempt + 1, maxRetries);
-        }
-
-        throw new TimeoutException($"命令 0x{cmd:X2} 无应答");
-    }
+    // MainWindow → CommWorker (跨线程，sendCommand 是 slot)
+    connect(this, &MainWindow::sendCommand,
+            m_commWorker, &CommWorker::sendFrame);
 }
 ```
 
 ### 5.3.3 RingBuffer — 高速环形缓冲
 
-```csharp
-/// <summary>
-/// 预分配环形缓冲，追加数据不产生内存分配。
-/// 用于高速波形数据暂存，供 OxyPlot 渲染。
-/// </summary>
-public class RingBuffer<T> where T : struct
-{
-    private readonly T[] _buffer;
-    private long _writePos;
+```cpp
+// RingBuffer.h
+#pragma once
+#include <vector>
+#include <atomic>
+#include <span>
 
-    public RingBuffer(int capacity)
-    {
-        _buffer = new T[capacity];
-        _writePos = 0;
+/// 线程安全的预分配环形缓冲。
+/// 追加不分配内存，供高速波形数据暂存。
+template<typename T>
+class RingBuffer {
+public:
+    explicit RingBuffer(size_t capacity)
+        : m_buffer(capacity), m_capacity(capacity), m_writePos(0) {}
+
+    /// 追加数据（线程安全）
+    void append(std::span<const T> data) {
+        size_t writeIdx = m_writePos.load(std::memory_order_relaxed) % m_capacity;
+        size_t len = data.size();
+
+        if (writeIdx + len <= m_capacity) {
+            std::copy(data.begin(), data.end(), m_buffer.begin() + writeIdx);
+        } else {
+            size_t firstPart = m_capacity - writeIdx;
+            std::copy(data.begin(), data.begin() + firstPart,
+                      m_buffer.begin() + writeIdx);
+            std::copy(data.begin() + firstPart, data.end(),
+                      m_buffer.begin());
+        }
+        m_writePos.fetch_add(len, std::memory_order_release);
     }
 
-    public void Append(ReadOnlySpan<T> data)
-    {
-        int capacity = _buffer.Length;
-        int writeIndex = (int)(_writePos % capacity);
-        int len = data.Length;
+    /// 获取最近 N 个数据点
+    std::vector<T> getRecent(size_t count) const {
+        size_t pos = m_writePos.load(std::memory_order_acquire);
+        size_t start = (pos >= count) ? (pos - count) : 0;
+        start %= m_capacity;
 
-        if (writeIndex + len <= capacity)
-        {
-            // 单次拷贝
-            data.CopyTo(_buffer.AsSpan(writeIndex));
+        std::vector<T> result(count);
+        if (start + count <= m_capacity) {
+            std::copy(m_buffer.begin() + start,
+                      m_buffer.begin() + start + count, result.begin());
+        } else {
+            size_t firstPart = m_capacity - start;
+            std::copy(m_buffer.begin() + start, m_buffer.end(), result.begin());
+            std::copy(m_buffer.begin(), m_buffer.begin() + (count - firstPart),
+                      result.begin() + firstPart);
         }
-        else
-        {
-            // 跨边界：分两段
-            int firstPart = capacity - writeIndex;
-            data.Slice(0, firstPart).CopyTo(_buffer.AsSpan(writeIndex));
-            data.Slice(firstPart).CopyTo(_buffer.AsSpan(0));
-        }
-
-        Interlocked.Add(ref _writePos, len);
-    }
-
-    public ReadOnlySpan<T> GetRecent(int count)
-    {
-        long pos = Interlocked.Read(ref _writePos);
-        int capacity = _buffer.Length;
-        int start = (int)((pos - count) % capacity);
-        if (start < 0) start += capacity;
-
-        if (start + count <= capacity)
-            return _buffer.AsSpan(start, count);
-
-        // 跨边界 → 需要拷贝 (罕见情况)
-        var result = new T[count];
-        int firstPart = capacity - start;
-        _buffer.AsSpan(start, firstPart).CopyTo(result);
-        _buffer.AsSpan(0, count - firstPart).CopyTo(result.AsSpan(firstPart));
         return result;
     }
+
+    size_t totalWritten() const {
+        return m_writePos.load(std::memory_order_acquire);
+    }
+
+private:
+    std::vector<T>       m_buffer;
+    size_t               m_capacity;
+    std::atomic<size_t>  m_writePos;
+};
+```
+
+### 5.3.4 MainWindow — QCustomPlot 波形显示
+
+```cpp
+// MainWindow.h
+#pragma once
+#include <QMainWindow>
+#include "qcustomplot.h"
+#include "RingBuffer.h"
+
+class CommWorker;
+class DataProcessor;
+
+class MainWindow : public QMainWindow
+{
+    Q_OBJECT
+public:
+    explicit MainWindow(QWidget *parent = nullptr);
+    ~MainWindow();
+
+signals:
+    void sendCommand(Frame frame);
+
+public slots:
+    void updatePlot();
+    void onTriggerReady(quint32 seq);
+
+private:
+    void setupUi();
+    void setupThreads();
+    void setupConnections();
+
+    // UI
+    QCustomPlot *m_plotVout;
+    QCustomPlot *m_plotIL;
+
+    // 线程对象
+    QThread      *m_commThread;
+    QThread      *m_procThread;
+    CommWorker   *m_commWorker;
+    DataProcessor *m_dataProcessor;
+
+    // 渲染定时器
+    QTimer       *m_renderTimer;
+};
+
+// MainWindow.cpp (关键)
+void MainWindow::setupThreads()
+{
+    // 通信线程
+    m_commThread = new QThread(this);
+    m_commWorker = new CommWorker();  // 无 parent，手动 moveToThread
+    m_commWorker->moveToThread(m_commThread);
+    m_commThread->start();
+
+    // 数据处理线程
+    m_procThread = new QThread(this);
+    m_dataProcessor = new DataProcessor();
+    m_dataProcessor->moveToThread(m_procThread);
+    m_procThread->start();
+
+    // 清理
+    connect(m_commThread, &QThread::finished, m_commWorker, &QObject::deleteLater);
+    connect(m_procThread, &QThread::finished, m_dataProcessor, &QObject::deleteLater);
+}
+
+void MainWindow::setupUi()
+{
+    // === QCustomPlot 配置 ===
+
+    // Vout 通道
+    m_plotVout = new QCustomPlot(this);
+    m_plotVout->addGraph();
+    m_plotVout->graph(0)->setPen(QPen(QColor("#00BCD4"), 1.5));
+    m_plotVout->xAxis->setLabel("采样点");
+    m_plotVout->yAxis->setLabel("Vout (V)");
+    m_plotVout->yAxis->setRange(0, 15);
+    m_plotVout->setInteractions(QCP::iRangeDrag | QCP::iRangeZoom);
+    m_plotVout->axisRect()->setRangeZoom(Qt::Horizontal);
+
+    // 性能优化
+    m_plotVout->setNotAntialiasedElements(QCP::aeAll);   // 关闭抗锯齿
+    m_plotVout->setOpenGl(false);                         // 不用 OpenGL (兼容性)
+    m_plotVout->plotLayout()->setAutoMargins(false);
+    m_plotVout->plotLayout()->setMargins(QMargins(0,0,0,0));
+
+    // I_L 通道
+    m_plotIL = new QCustomPlot(this);
+    // ... 同上配置
+
+    // 布局: 上下两个 Plot
+    auto *layout = new QVBoxLayout;
+    layout->addWidget(m_plotVout, 3);
+    layout->addWidget(m_plotIL, 2);
+
+    auto *central = new QWidget(this);
+    central->setLayout(layout);
+    setCentralWidget(central);
+
+    // 渲染定时器 33ms → ~30 FPS
+    m_renderTimer = new QTimer(this);
+    connect(m_renderTimer, &QTimer::timeout, this, &MainWindow::updatePlot);
+    m_renderTimer->start(33);
+}
+
+void MainWindow::updatePlot()
+{
+    // 在 UI 线程执行，只读缓冲 → 生成 QCPGraphData
+    // 绝不做 socket I/O 或任何阻塞操作
+
+    auto voutData = m_dataProcessor->voutBuffer().getRecent(10000);
+    auto ilData   = m_dataProcessor->ilBuffer().getRecent(10000);
+
+    // 双缓冲更新 (QCustomPlot 的 replot 内部双缓冲)
+    QVector<QCPGraphData> voutPoints(voutData.size());
+    for (size_t i = 0; i < voutData.size(); i++) {
+        voutPoints[i].key = static_cast<double>(i);
+        voutPoints[i].value = voutData[i];
+    }
+    m_plotVout->graph(0)->data()->set(voutPoints, true);
+    m_plotVout->replot(QCustomPlot::rpQueuedReplot);
+
+    QVector<QCPGraphData> ilPoints(ilData.size());
+    for (size_t i = 0; i < ilData.size(); i++) {
+        ilPoints[i].key = static_cast<double>(i);
+        ilPoints[i].value = ilData[i];
+    }
+    m_plotIL->graph(0)->data()->set(ilPoints, true);
+    m_plotIL->replot(QCustomPlot::rpQueuedReplot);
 }
 ```
 
-### 5.3.4 MainWindow — UI 线程绑定
+### 5.3.5 DataProcessor — 数据处理线程
 
-```csharp
-public partial class MainWindow : Window
+```cpp
+// DataProcessor.h
+#pragma once
+#include <QObject>
+#include "RingBuffer.h"
+
+class DataProcessor : public QObject
 {
-    private readonly CommunicationThread _comm = new();
-    private readonly RingBuffer<double> _ringVout = new(1_000_000);  // 1M points
-    private readonly RingBuffer<double> _ringIL   = new(1_000_000);
+    Q_OBJECT
+public:
+    explicit DataProcessor(QObject *parent = nullptr);
 
-    private readonly DispatcherTimer _renderTimer;
+    RingBuffer<double> &voutBuffer() { return m_ringVout; }
+    RingBuffer<double> &ilBuffer()   { return m_ringIL; }
 
-    public MainWindow()
-    {
-        InitializeComponent();
+public slots:
+    void onStreamData(quint32 seq, QByteArray rawData);
+    void onTriggerData(quint32 seq, QByteArray rawData);
+    void onParamResponse(uint16_t id, uint32_t value);
 
-        // 33ms ≈ 30 FPS 渲染
-        _renderTimer = new DispatcherTimer(
-            TimeSpan.FromMilliseconds(33),
-            DispatcherPriority.Normal,
-            OnRenderTick,
-            Dispatcher);
+signals:
+    void plotDataReady();          // → MainWindow::updatePlot()
+    void triggerReady(quint32 seq);
 
-        // 启动通信线程
-        Task.Run(() => _comm.ConnectAsync("192.168.1.100", 5000));
+private:
+    RingBuffer<double> m_ringVout{10'000'000};  // 10M points
+    RingBuffer<double> m_ringIL{10'000'000};
 
-        // 启动数据处理线程
-        Task.Run(DataProcessLoop);
-    }
+    void parseDataBlock(const QByteArray &raw, std::vector<double> &vout,
+                        std::vector<double> &il, std::vector<double> &duty);
+};
 
-    /// <summary>
-    /// 渲染回调 — 在 UI 线程执行，只读缓冲。
-    /// 绝不调任何阻塞操作。
-    /// </summary>
-    private void OnRenderTick(object? sender, EventArgs e)
-    {
-        // 获取最近 10000 点 → 生成 OxyPlot DataPoint[]
-        var voutData = _ringVout.GetRecent(10000);
-        var ilData = _ringIL.GetRecent(10000);
+void DataProcessor::onStreamData(quint32 /*seq*/, QByteArray rawData)
+{
+    std::vector<double> vout, il, duty;
+    parseDataBlock(rawData, vout, il, duty);
 
-        // 更新 Plot (OxyPlot 的 RefreshPlot 内部双缓冲)
-        var voutSeries = (LineSeries)PlotVout.Series[0];
-        voutSeries.Points.Clear();
-        for (int i = 0; i < voutData.Length; i++)
-            voutSeries.Points.Add(new DataPoint(i, voutData[i]));
+    m_ringVout.append(vout);
+    m_ringIL.append(il);
 
-        var ilSeries = (LineSeries)PlotIL.Series[0];
-        ilSeries.Points.Clear();
-        for (int i = 0; i < ilData.Length; i++)
-            ilSeries.Points.Add(new DataPoint(i, ilData[i]));
-
-        PlotVout.InvalidatePlot(true);
-        PlotIL.InvalidatePlot(true);
-    }
-
-    /// <summary>
-    /// 数据处理循环 — 后台线程。
-    /// 从通信线程消费 DataChunk，推入环形缓冲。
-    /// </summary>
-    private void DataProcessLoop()
-    {
-        foreach (var chunk in _comm.DataQueue.GetConsumingEnumerable())
-        {
-            // 写入环形缓冲
-            _ringVout.Append(chunk.VoutData);
-            _ringIL.Append(chunk.ILData);
-
-            // 异步存储到文件 (不阻塞)
-            // await FileStorage.WriteAsync(chunk);
-        }
-    }
+    emit plotDataReady();
 }
 ```
 
 ## 5.4 参数配置面板
 
-```csharp
-/// <summary>
-/// 参数 ViewModel — 双向绑定。
-/// 用户修改参数 → 异步发送 CMD_WRITE_PARAM → 等待应答 → 更新状态。
-/// </summary>
-public class ParameterViewModel : INotifyPropertyChanged
+```cpp
+// ParameterPanel.h
+#pragma once
+#include <QWidget>
+#include <QLineEdit>
+#include <QPushButton>
+
+class ParameterPanel : public QWidget
 {
-    private readonly CommunicationThread _comm;
+    Q_OBJECT
+public:
+    explicit ParameterPanel(QWidget *parent = nullptr);
 
-    private double _inductance = 100.0;  // μH
-    public double Inductance
-    {
-        get => _inductance;
-        set
-        {
-            if (SetProperty(ref _inductance, value))
-                _ = WriteParamAsync(0x0001, (uint)(value * 1000)); // μH → nH
-        }
-    }
+signals:
+    /// 参数变化 → MainWindow 转发到 CommWorker
+    void paramChanged(uint16_t id, uint32_t value);
 
-    private double _capacitance = 100.0;  // μF
-    public double Capacitance
-    {
-        get => _capacitance;
-        set
-        {
-            if (SetProperty(ref _capacitance, value))
-                _ = WriteParamAsync(0x0002, (uint)(value * 1_000_000)); // μF → pF
-        }
-    }
+private slots:
+    void onInductanceChanged();
+    void onCapacitanceChanged();
+    void onLoadResistanceChanged();
+    void onVinChanged();
 
-    private double _loadResistance = 10.0;  // Ω
-    public double LoadResistance
-    {
-        get => _loadResistance;
-        set
-        {
-            if (SetProperty(ref _loadResistance, value))
-                _ = WriteParamAsync(0x0003, (uint)(value * 1000)); // Ω → mΩ
-        }
-    }
+private:
+    QLineEdit *m_editL;       // 电感 (μH)
+    QLineEdit *m_editC;       // 电容 (μF)
+    QLineEdit *m_editRLoad;   // 负载 (Ω)
+    QLineEdit *m_editVin;     // 输入电压 (V)
+    QLineEdit *m_editFsw;     // 开关频率 (kHz)
 
-    private async Task WriteParamAsync(ushort id, uint value)
-    {
-        try
-        {
-            var payload = new byte[6];
-            payload[0] = (byte)(id >> 8);
-            payload[1] = (byte)(id & 0xFF);
-            payload[2] = (byte)(value >> 24);
-            payload[3] = (byte)(value >> 16);
-            payload[4] = (byte)(value >> 8);
-            payload[5] = (byte)(value & 0xFF);
+    void setupUi();
+    uint32_t toRawValue(const QString &text, double scale);
+};
 
-            var response = await _comm.SendCommandAsync(0x01, payload);
-
-            // 检查应答: CMD_PARAM_RESP + 相同 ID
-            if (response.Cmd == 0x10 && response.Payload[0] == payload[0]
-                                     && response.Payload[1] == payload[1])
-            {
-                StatusMessage = "参数写入成功";
-            }
-            else
-            {
-                StatusMessage = "参数写入失败: 应答不匹配";
-            }
-        }
-        catch (TimeoutException)
-        {
-            StatusMessage = "参数写入失败: 超时";
-        }
-    }
-
-    public string? StatusMessage { get; private set; }
-    public event PropertyChangedEventHandler? PropertyChanged;
-}
-```
-
-## 5.5 文件存储
-
-```csharp
-/// <summary>
-/// 异步文件写入器 — 不阻塞通信/UI 线程。
-/// 二进制格式存储，紧凑且可直接回放。
-/// </summary>
-public class FileStorage
+void ParameterPanel::onInductanceChanged()
 {
-    private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private FileStream? _file;
-    private readonly string _baseDir;
-
-    public FileStorage(string baseDir)
-    {
-        _baseDir = baseDir;
-    }
-
-    /// <summary>
-    /// 开始新记录会话 (自动命名: YYYYMMDD_HHMMSS.bin)
-    /// </summary>
-    public async Task BeginSessionAsync()
-    {
-        await _writeLock.WaitAsync();
-        try
-        {
-            var name = $"{DateTime.Now:yyyyMMdd_HHmmss}.bin";
-            _file = new FileStream(
-                Path.Combine(_baseDir, name),
-                FileMode.Create,
-                FileAccess.Write,
-                FileShare.Read,
-                65536,  // 64KB buffer
-                FileOptions.Asynchronous);
-        }
-        finally { _writeLock.Release(); }
-    }
-
-    /// <summary>
-    /// 追加数据块 (异步)
-    /// </summary>
-    public async Task WriteChunkAsync(DataChunk chunk)
-    {
-        await _writeLock.WaitAsync();
-        try
-        {
-            if (_file == null) return;
-
-            // 格式: [4B seq][2B count][N × 8B samples]
-            var header = new byte[6];
-            BitConverter.TryWriteBytes(header.AsSpan(0, 4), chunk.Seq);
-            BitConverter.TryWriteBytes(header.AsSpan(4, 2), chunk.Count);
-            await _file.WriteAsync(header);
-
-            await _file.WriteAsync(chunk.RawData);
-            await _file.FlushAsync();
-        }
-        finally { _writeLock.Release(); }
+    bool ok;
+    double val = m_editL->text().toDouble(&ok);
+    if (ok && val > 0) {
+        // μH → nH
+        uint32_t raw = static_cast<uint32_t>(val * 1000);
+        emit paramChanged(0x0001, raw);
     }
 }
 ```
 
-## 5.6 测试脚本引擎
+## 5.5 CMake 构建系统
 
-```csharp
-/// <summary>
-/// 轻量级测试序列引擎。
-/// 支持: 设置参数 → 延时 → 触发 → 等待数据 → 设置参数 → ...
-/// </summary>
-public class TestScriptEngine
-{
-    public enum StepType { SetParam, Delay, StartSim, StopSim, ArmTrigger, WaitTrigger, Verify }
+```cmake
+# CMakeLists.txt
+cmake_minimum_required(VERSION 3.20)
+project(BuckHil VERSION 1.0.0 LANGUAGES CXX)
 
-    public record Step(StepType Type, Dictionary<string, object>? Args = null);
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
 
-    private readonly CommunicationThread _comm;
-    private readonly ParameterViewModel _params;
+# === Qt 依赖 ===
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
+# 如需跨平台串口备选:
+# find_package(Qt6 COMPONENTS SerialPort)
 
-    public async Task RunAsync(IEnumerable<Step> steps, CancellationToken ct)
-    {
-        foreach (var step in steps)
-        {
-            ct.ThrowIfCancellationRequested();
+# === QCustomPlot (单文件集成) ===
+add_library(qcustomplot STATIC
+    3rdparty/qcustomplot/qcustomplot.cpp
+    3rdparty/qcustomplot/qcustomplot.h
+)
+target_link_libraries(qcustomplot PUBLIC Qt6::Widgets Qt6::PrintSupport)
+target_include_directories(qcustomplot PUBLIC 3rdparty/qcustomplot)
 
-            switch (step.Type)
-            {
-                case StepType.SetParam:
-                    // 从 step.Args 提取 id/value 并发送
-                    break;
-                case StepType.Delay:
-                    await Task.Delay((int)(step.Args!["ms"]), ct);
-                    break;
-                case StepType.StartSim:
-                    await _comm.SendCommandAsync(0x05, new byte[] { 0x01 });
-                    break;
-                case StepType.ArmTrigger:
-                    // 配置触发条件并下发
-                    break;
-                case StepType.WaitTrigger:
-                    // 等待触发数据到达
-                    break;
-            }
-        }
-    }
-}
+# === 主程序 ===
+set(SOURCES
+    src/main.cpp
+    src/MainWindow.cpp
+    src/ParameterPanel.cpp
+    src/CommunicationWorker.cpp
+    src/FrameParser.cpp
+    src/DataProcessor.cpp
+)
+
+set(HEADERS
+    src/MainWindow.h
+    src/ParameterPanel.h
+    src/CommunicationWorker.h
+    src/FrameParser.h
+    src/DataProcessor.h
+    src/RingBuffer.h
+    protocol/Protocol.h
+)
+
+add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    Qt6::Widgets
+    Qt6::Network
+    qcustomplot
+)
+
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/protocol
+)
+
+# === 安装 ===
+install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
+```
+
+## 5.6 Protocol.h — 协议常量
+
+```cpp
+// Protocol.h
+#pragma once
+#include <cstdint>
+
+namespace Protocol {
+
+// 命令码
+constexpr uint8_t CMD_WRITE_PARAM      = 0x01;
+constexpr uint8_t CMD_READ_PARAM       = 0x02;
+constexpr uint8_t CMD_WRITE_PARAM_BATCH = 0x03;
+constexpr uint8_t CMD_SET_TRIGGER      = 0x04;
+constexpr uint8_t CMD_SIM_CTRL         = 0x05;
+constexpr uint8_t CMD_GET_STATUS       = 0x06;
+constexpr uint8_t CMD_SELF_TEST        = 0x07;
+
+constexpr uint8_t CMD_PARAM_RESP       = 0x10;
+constexpr uint8_t CMD_TRIG_DATA        = 0x11;
+constexpr uint8_t CMD_STREAM_DATA      = 0x12;
+constexpr uint8_t CMD_STATUS_RESP      = 0x13;
+constexpr uint8_t CMD_SELF_TEST_RESP   = 0x14;
+constexpr uint8_t CMD_ASYNC_EVENT      = 0xFE;
+constexpr uint8_t CMD_ERROR            = 0xFF;
+
+// 仿真控制
+constexpr uint8_t SIM_STOP   = 0x00;
+constexpr uint8_t SIM_START  = 0x01;
+constexpr uint8_t SIM_RESET  = 0x02;
+constexpr uint8_t SIM_TRIG   = 0x03;
+
+// 参数 ID
+constexpr uint16_t PARAM_L            = 0x0001;
+constexpr uint16_t PARAM_C            = 0x0002;
+constexpr uint16_t PARAM_R_LOAD       = 0x0003;
+constexpr uint16_t PARAM_VIN          = 0x0004;
+constexpr uint16_t PARAM_R_L          = 0x0005;
+constexpr uint16_t PARAM_VF           = 0x0006;
+constexpr uint16_t PARAM_F_SW         = 0x0007;
+constexpr uint16_t PARAM_IL_MAX       = 0x0008;
+constexpr uint16_t PARAM_FW_VERSION   = 0x0100;
+constexpr uint16_t PARAM_DEVICE_ID    = 0x0101;
+
+} // namespace Protocol
 ```
 
 ## 5.7 项目结构
 
 ```
 host/
-├── BuckHil.sln
-├── BuckHil/
-│   ├── BuckHil.csproj
-│   ├── App.xaml
-│   ├── App.xaml.cs
-│   ├── MainWindow.xaml
-│   ├── MainWindow.xaml.cs
-│   ├── Communication/
-│   │   ├── FrameParser.cs
-│   │   ├── CommunicationThread.cs
-│   │   ├── DataChunk.cs
-│   │   └── ConnectionState.cs
-│   ├── Model/
-│   │   ├── RingBuffer.cs
-│   │   ├── ParameterViewModel.cs
-│   │   └── StatusViewModel.cs
-│   ├── Storage/
-│   │   └── FileStorage.cs
-│   ├── Scripting/
-│   │   └── TestScriptEngine.cs
-│   └── Views/
-│       ├── WaveformView.xaml
-│       ├── ParameterPanel.xaml
-│       └── ScriptEditor.xaml
+├── CMakeLists.txt
+├── 3rdparty/
+│   └── qcustomplot/
+│       ├── qcustomplot.h
+│       └── qcustomplot.cpp
+├── src/
+│   ├── main.cpp                    # 入口: QApplication + MainWindow
+│   ├── MainWindow.h / .cpp         # 主窗口, 线程创建, 信号连接
+│   ├── ParameterPanel.h / .cpp     # 参数配置面板
+│   ├── CommunicationWorker.h / .cpp # 通信线程 (QTcpSocket + FrameParser)
+│   ├── FrameParser.h / .cpp        # 帧解析状态机
+│   ├── DataProcessor.h / .cpp      # 数据处理线程 (RingBuffer 管理)
+│   └── RingBuffer.h                # 环形缓冲模板
 └── protocol/
-    └── Protocol.cs         # 命令常量、Frame 结构体、CRC16
+    └── Protocol.h                  # 命令常量定义
 ```
 
-## 5.8 构建与部署
+## 5.8 main.cpp
 
-```xml
-<!-- BuckHil.csproj (简化) -->
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
-    <UseWPF>true</UseWPF>
-    <Nullable>enable</Nullable>
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>false</SelfContained>
-  </PropertyGroup>
+```cpp
+#include <QApplication>
+#include "MainWindow.h"
 
-  <ItemGroup>
-    <PackageReference Include="OxyPlot.Wpf" Version="2.1.*" />
-    <PackageReference Include="Serilog.Sinks.File" Version="5.*" />
-  </ItemGroup>
-</Project>
+int main(int argc, char *argv[])
+{
+    QApplication app(argc, argv);
+    app.setApplicationName("BuckHIL");
+    app.setApplicationVersion("1.0.0");
+
+    MainWindow window;
+    window.setWindowTitle("Buck HIL — ZU3EG");
+    window.resize(1280, 800);
+    window.show();
+
+    return app.exec();
+}
 ```
 
-**发布命令**:
+## 5.9 跨平台说明
+
+| 平台 | 编译器 | Qt 获取 | 备注 |
+|------|--------|---------|------|
+| Windows 10/11 | MSVC 2022 / MinGW 11+ | Qt Online Installer / vcpkg | 推荐 MSVC，调试体验好 |
+| Ubuntu 22.04+ | GCC 11+ | `apt install qt6-base-dev` | 包管理器直接装 |
+| macOS 13+ | Clang 14+ | Homebrew `qt@6` | — |
+
+**构建命令统一**：
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained false -o ./publish
+cd host
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . --parallel $(nproc)
 ```
+
+## 5.10 与 C#/WPF 方案的关键差异
+
+| 方面 | C#/WPF (旧方案) | Qt/C++ (新方案) |
+|------|-----------------|-----------------|
+| 跨平台 | 仅 Windows (.NET 8 可跨但 WPF 不可) | Windows/Linux/macOS 全支持 |
+| 线程模型 | ConcurrentQueue + BlockingCollection | 信号槽 QueuedConnection，自动线程安全 |
+| 图形 | OxyPlot (托管) | QCustomPlot (原生，更高刷新率) |
+| 部署 | 需 .NET Runtime | 静态链接或自带 Qt dll (~15MB) |
+| 内存控制 | GC 控制困难，大缓冲易触发 Gen2 | 完全手动，零意外 GC |
+| 性能 | JIT 预热后与 C++ 差距小 | 原生编译，冷启动即最优 |
+| 依赖 | .NET 8 SDK + NuGet | CMake + Qt 6 SDK |

@@ -18,13 +18,13 @@
 | 模型类型 | 开关状态模型 (Switched-State) |
 | 接口 | PWM 捕获 (400MHz 定时器) + DAC 输出 (16-bit AD5686) |
 | 通信 | TCP/IP (1Gbps Ethernet), 自定义二进制帧协议 + CRC16 |
-| 上位机 | C# / WPF + OxyPlot |
+| 上位机 | Qt 6 (C++), QCustomPlot, CMake |
 
 ### 系统架构图
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   上位机 (C# / WPF)                       │
+│                   上位机 (Qt 6 / C++)                       │
 │  [波形显示] [参数配置] [测试脚本] [数据记录]                │
 └──────────────────────┬──────────────────────────────────┘
                        │ TCP/IP (1Gbps)
@@ -67,7 +67,7 @@
 | [docs/2-pl-fpga-design.md](docs/2-pl-fpga-design.md) | PL 端模块设计（PWM捕获、求解器、DAC接口） |
 | [docs/3-communication-protocol.md](docs/3-communication-protocol.md) | PS↔上位机通信协议完整定义 |
 | [docs/4-ps-software-design.md](docs/4-ps-software-design.md) | PS 端软件架构（Baremetal + lwIP） |
-| [docs/5-host-application.md](docs/5-host-application.md) | 上位机架构（C#/WPF，线程模型，帧解析器） |
+| [docs/5-host-application.md](docs/5-host-application.md) | 上位机架构（Qt 6 / C++，QThread 线程模型，QCustomPlot） |
 | [docs/6-hardware-interface.md](docs/6-hardware-interface.md) | 硬件接口规范（引脚分配、模拟前端、电源） |
 
 ## 目录结构
@@ -102,12 +102,16 @@ buck-hil/
 │       ├── protocol.h
 │       └── dma_ctrl.h
 ├── host/                         # 上位机代码 (待实现)
+│   ├── CMakeLists.txt
 │   ├── src/
-│   │   ├── MainWindow.xaml
-│   │   ├── CommunicationThread.cs
-│   │   └── FrameParser.cs
+│   │   ├── main.cpp
+│   │   ├── MainWindow.h / .cpp
+│   │   ├── CommunicationWorker.h / .cpp
+│   │   ├── FrameParser.h / .cpp
+│   │   ├── RingBuffer.h
+│   │   └── ParameterPanel.h / .cpp
 │   └── protocol/
-│       └── Protocol.cs
+│       └── Protocol.h
 └── hardware/                     # 硬件设计 (待实现)
     ├── sch/
     │   └── analog_frontend.sch
@@ -121,14 +125,19 @@ buck-hil/
 
 - **FPGA**: Vivado 2024.1+ (支持 ZU3EG)
 - **PS**: Vitis IDE 2024.1+ (Baremetal 工具链)
-- **上位机**: .NET 8.0 SDK, Windows 10/11
+- **上位机**: Qt 6.5+, CMake 3.20+, C++17 编译器 (GCC 11+/Clang 14+/MSVC 2022+)
 - **外部硬件**: AD5686 DAC 模块, 运放调理板
 
 ### 构建步骤
 
 1. Vivado 打开 `fpga/` 工程，综合 + 实现，生成 bitstream
 2. Vitis 打开 `ps/` 工程，编译固件，生成 BOOT.bin
-3. Visual Studio 打开 `host/` 工程，编译 WPF 应用
+3. 上位机构建:
+   ```bash
+   cd host && mkdir build && cd build
+   cmake .. -DCMAKE_BUILD_TYPE=Release
+   cmake --build . --parallel
+   ```
 4. 加载 bitstream + 固件到 ZU3EG
 5. 启动上位机，连接 TCP 端口 5000
 
