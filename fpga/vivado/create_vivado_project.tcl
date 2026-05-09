@@ -74,23 +74,43 @@ puts "Creating Block Design..."
 
 create_bd_design "system"
 
-# ---- IP 版本自动探测 ----
-# 不同 Vivado 版本 IP VLNV 版本号不同，此处动态查找
-proc get_ip_vlnv {pattern} {
-    set matches [get_ipdefs -filter "VLNV =~ \"$pattern\""]
-    if {[llength $matches] == 0} {
-        error "IP not found: $pattern. Check Vivado installation / IP catalog."
+# ---- IP 版本自动探测 (带常见版本回退) ----
+# 不同 Vivado 版本 IP VLNV 版本号不同。
+# 策略: 先查询 IP catalog → 查不到则用常见版本列表匹配
+proc get_ip_vlnv {ip_name fallback_list} {
+    # 尝试刷新 catalog
+    catch { update_ip_catalog -quiet -repo_paths {} }
+
+    # 尝试查询
+    set matches {}
+    catch { set matches [get_ipdefs -filter "VLNV =~ \"xilinx.com:ip:${ip_name}:*\""] }
+
+    if {[llength $matches] > 0} {
+        set vlnv [lindex $matches end]
+        puts "    [Detected] $vlnv"
+        return $vlnv
     }
-    # 取最新版本（最后一个）
-    return [lindex $matches end]
+
+    # 回退: 遍历已知版本列表，用 create_bd_cell 测试
+    foreach ver $fallback_list {
+        set test_vlnv "xilinx.com:ip:${ip_name}:${ver}"
+        if {[catch {create_bd_cell -type ip -vlnv $test_vlnv "${ip_name}_test"}] == 0} {
+            # 成功 → 删除测试 cell 并返回
+            remove_bd_cell [get_bd_cells "${ip_name}_test"] -quiet
+            puts "    [Fallback]  $test_vlnv"
+            return $test_vlnv
+        }
+    }
+    error "IP not found: xilinx.com:ip:${ip_name}:*. Check Vivado IP catalog."
 }
 
-set zynq_vlnv       [get_ip_vlnv "xilinx.com:ip:zynq_ultra_ps_e:*"]
-set axi_ic_vlnv      [get_ip_vlnv "xilinx.com:ip:axi_interconnect:*"]
-set axi_dma_vlnv     [get_ip_vlnv "xilinx.com:ip:axi_dma:*"]
-set proc_rst_vlnv    [get_ip_vlnv "xilinx.com:ip:proc_sys_reset:*"]
-set util_buf_vlnv    [get_ip_vlnv "xilinx.com:ip:util_ds_buf:*"]
-set xlconcat_vlnv    [get_ip_vlnv "xilinx.com:ip:xlconcat:*"]
+# 已知版本列表 (从新到旧, 覆盖 Vivado 2020.2 ~ 2024.2)
+set zynq_vlnv    [get_ip_vlnv "zynq_ultra_ps_e"  {3.5 3.4 3.3 3.2}]
+set axi_ic_vlnv   [get_ip_vlnv "axi_interconnect"  {2.1 2.0}]
+set axi_dma_vlnv  [get_ip_vlnv "axi_dma"           {7.1 7.0}]
+set proc_rst_vlnv [get_ip_vlnv "proc_sys_reset"    {5.0 4.0}]
+set util_buf_vlnv [get_ip_vlnv "util_ds_buf"       {2.2 2.1}]
+set xlconcat_vlnv [get_ip_vlnv "xlconcat"           {2.1 2.0}]
 
 puts "  Detected IP versions:"
 puts "    ZynqMP PS:      $zynq_vlnv"
