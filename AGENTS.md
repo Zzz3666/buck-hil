@@ -47,6 +47,8 @@
 | `docs/4-ps-software-design.md` | Baremetal架构、lwIP TCP回调、DMA管理、参数预计算 |
 | `docs/5-host-application.md` | Qt 6 / C++、QThread模型、FrameParser、QCustomPlot、CMake |
 | `docs/6-hardware-interface.md` | 引脚分配、模拟前端、电源树、BOM、验证清单 |
+| `docs/7-buck-solver-design.md` | 求解器数学模型、定点格式、4级流水线、钳位策略、误差分析 |
+| `docs/8-vivado-setup-guide.md` | Vivado工程创建、引脚分配、综合实现、ILA调试、XSA导出 |
 
 ## 目录结构
 
@@ -55,24 +57,34 @@ buck-hil/
 ├── README.md
 ├── AGENTS.md                       # ← 本文件
 ├── .gitignore
-├── docs/                           # 架构设计文档（完整）
+├── docs/                           # 架构设计文档 (8 份)
 │   ├── 1-system-architecture.md
 │   ├── 2-pl-fpga-design.md
 │   ├── 3-communication-protocol.md
 │   ├── 4-ps-software-design.md
 │   ├── 5-host-application.md
-│   └── 6-hardware-interface.md
-├── fpga/                           # PL 端 RTL（待实现）
-│   ├── rtl/   (pwm_capture.sv, buck_solver.sv, dac_interface.sv, axi_mm_regs.sv)
+│   ├── 6-hardware-interface.md
+│   ├── 7-buck-solver-design.md
+│   └── 8-vivado-setup-guide.md
+├── fpga/                           # PL 端 RTL (7 模块完整)
+│   ├── rtl/   (buck_hil_top.sv, axi_mm_regs.sv, pwm_capture.sv,
+│   │           buck_solver.sv, dac_interface.sv, capture_manager.sv)
 │   ├── constraints/ (zu3eg.xdc)
-│   └── tb/    (buck_solver_tb.sv)
-├── ps/                             # PS 端固件（待实现）
-│   ├── src/   (main.c, protocol.c, tcp_server.c, dma_ctrl.c, params.c)
-│   └── inc/   (protocol.h, tcp_server.h, dma_ctrl.h, params.h)
-├── host/                           # Qt 上位机（待实现）
+│   ├── tb/    (buck_solver_tb.sv)
+│   └── vivado/ (create_vivado_project.tcl)
+├── ps/                             # PS 端固件 (7 模块完整)
+│   ├── src/   (main.c, protocol.c, tcp_server.c, dma_ctrl.c,
+│   │           params.c, logger.c, platform.c)
+│   ├── inc/   (protocol.h, tcp_server.h, dma_ctrl.h, params.h,
+│   │           logger.h, platform.h)
+│   ├── lscript.ld
+│   └── Makefile
+├── host/                           # Qt 上位机 (14 源文件完整)
 │   ├── CMakeLists.txt
 │   ├── 3rdparty/qcustomplot/
-│   ├── src/   (main.cpp, MainWindow, CommunicationWorker, FrameParser, DataProcessor, RingBuffer.h)
+│   ├── src/   (main.cpp, MainWindow.h/.cpp, ParameterPanel.h/.cpp,
+│   │           CommunicationWorker.h/.cpp, FrameParser.h/.cpp,
+│   │           DataProcessor.h/.cpp, RingBuffer.h)
 │   └── protocol/ (Protocol.h)
 └── hardware/                       # 接口板（待设计）
     ├── sch/   (analog_frontend.sch)
@@ -207,11 +219,25 @@ CMake: Qt6::Widgets + Qt6::Network + qcustomplot (静态链接)
 
 ## TODO / 下一步
 
-当前阶段：buck_solver 完成，待实现 pwm_capture。
+当前阶段：**三层代码完成，待硬件集成验证**。
 
-优先级：
-1. ~~`fpga/rtl/buck_solver.sv` + testbench~~ ✅ Verilator 仿真通过
-2. ~~`fpga/rtl/pwm_capture.sv`~~ ✅ Verilator 仿真通过 (4 项全 PASS)
-3. ~~`fpga/rtl/dac_interface.sv`~~ ✅ Verilator 仿真通过 (5 项全 PASS)
-4. `ps/src/` 固件
-5. `host/src/` 上位机
+### 已完成 ✅
+
+| 层 | 内容 | 验证状态 |
+|----|------|---------|
+| FPGA RTL | 7 模块 (top, regs, pwm, solver, dac, capture) | 3 核心模块 Verilator 全 PASS |
+| PS 固件 | 7 模块 (main, protocol, params, tcp, dma, logger, platform) | standalone 语法检查 PASS |
+| Qt 上位机 | 14 源文件 (Protocol, FrameParser, CommWorker, DataProcessor, MainWindow, ParameterPanel) | 5 编译错误已修, 需 QCustomPlot 下载后编译 |
+| 通信协议 | 14 条命令 + CRC16 + 帧解析 | 上位机/PS 双端实现一致 |
+| 文档 | 8 份设计文档 + AGENTS.md | 完整 |
+
+### 待做
+
+| 优先级 | 任务 | 说明 |
+|--------|------|------|
+| 1 | **Vivado 综合 + 实现** | 填引脚号 → 综合 → 实现 → Bitstream |
+| 2 | **顶层 Verilator 仿真** | 为 `buck_hil_top` 写 testbench, 验证 CDC + 模块互联 |
+| 3 | **Vitis PS 固件编译** | 导出 XSA → Vitis 工程 → 编译 → 下载调试 |
+| 4 | **上位机联调** | 下载 QCustomPlot → 编译 → 连接 PS TCP → 调通波形 |
+| 5 | **硬件接口板** | 原理图 (DAC80508 + 模拟前端 + 电源) → PCB Layout |
+| 6 | **端到端闭环测试** | 实机 PWM 输入 → 求解器 → DAC 模拟输出 → DUT 反馈 |
