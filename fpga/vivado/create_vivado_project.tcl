@@ -74,8 +74,32 @@ puts "Creating Block Design..."
 
 create_bd_design "system"
 
+# ---- IP 版本自动探测 ----
+# 不同 Vivado 版本 IP VLNV 版本号不同，此处动态查找
+proc get_ip_vlnv {pattern} {
+    set matches [get_ipdefs -filter "VLNV =~ \"$pattern\""]
+    if {[llength $matches] == 0} {
+        error "IP not found: $pattern. Check Vivado installation / IP catalog."
+    }
+    # 取最新版本（最后一个）
+    return [lindex $matches end]
+}
+
+set zynq_vlnv       [get_ip_vlnv "xilinx.com:ip:zynq_ultra_ps_e:*"]
+set axi_ic_vlnv      [get_ip_vlnv "xilinx.com:ip:axi_interconnect:*"]
+set axi_dma_vlnv     [get_ip_vlnv "xilinx.com:ip:axi_dma:*"]
+set proc_rst_vlnv    [get_ip_vlnv "xilinx.com:ip:proc_sys_reset:*"]
+set util_buf_vlnv    [get_ip_vlnv "xilinx.com:ip:util_ds_buf:*"]
+set xlconcat_vlnv    [get_ip_vlnv "xilinx.com:ip:xlconcat:*"]
+
+puts "  Detected IP versions:"
+puts "    ZynqMP PS:      $zynq_vlnv"
+puts "    AXI Intercon:   $axi_ic_vlnv"
+puts "    AXI DMA:        $axi_dma_vlnv"
+puts "    Proc Sys Reset: $proc_rst_vlnv"
+
 # --- 1. Zynq UltraScale+ MPSoC ---
-set zynq [create_bd_cell -type ip -vlnv xilinx.com:ip:zynq_ultra_ps_e:3.4 zynq_ultra_ps_e]
+set zynq [create_bd_cell -type ip -vlnv $zynq_vlnv zynq_ultra_ps_e]
 
 # 配置 PS:
 #   - 使能 PL 时钟 0: 100 MHz
@@ -101,14 +125,14 @@ set_property -dict [list \
 ] [get_bd_cells $zynq]
 
 # --- 2. AXI Interconnect (GP0 → PL 寄存器) ---
-set axi_intercon [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_interconnect:2.1 axi_interconnect_0]
+set axi_intercon [create_bd_cell -type ip -vlnv $axi_ic_vlnv axi_interconnect_0]
 set_property -dict [list \
     CONFIG.NUM_MI {1} \
     CONFIG.NUM_SI {1} \
 ] $axi_intercon
 
 # --- 3. AXI DMA (S2MM channel only, capture → PS DDR) ---
-set axi_dma [create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dma:7.1 axi_dma_0]
+set axi_dma [create_bd_cell -type ip -vlnv $axi_dma_vlnv axi_dma_0]
 set_property -dict [list \
     CONFIG.c_include_mm2s {0} \
     CONFIG.c_include_s2mm {1} \
@@ -118,14 +142,14 @@ set_property -dict [list \
 ] $axi_dma
 
 # --- 4. Processor System Reset (for PL clock domains) ---
-set rst_100 [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_100]
-set rst_400 [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_400]
+set rst_100 [create_bd_cell -type ip -vlnv $proc_rst_vlnv rst_100]
+set rst_400 [create_bd_cell -type ip -vlnv $proc_rst_vlnv rst_400]
 
 # --- 5. Utility Buffer (LVDS clock input) ---
-set util_buf [create_bd_cell -type ip -vlnv xilinx.com:ip:util_ds_buf:2.2 util_ds_buf_0]
+set util_buf [create_bd_cell -type ip -vlnv $util_buf_vlnv util_ds_buf_0]
 
 # --- 6. Concat (interrupts) ---
-set concat [create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 xlconcat_0]
+set concat [create_bd_cell -type ip -vlnv $xlconcat_vlnv xlconcat_0]
 set_property -dict [list CONFIG.NUM_PORTS {4}] $concat
 
 #=============================================================================
