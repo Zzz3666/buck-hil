@@ -37,7 +37,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/3rdparty/qcustomplot/qcustomplot.cpp")
     target_include_directories(qcustomplot PUBLIC 3rdparty/qcustomplot)
 else()
     message(WARNING "QCustomPlot not found in 3rdparty/qcustomplot/")
-    message(STATUS "  Download: https://www.qcustomplot.com/release/latest/QCustomPlot-source.tar.gz")
+    message(STATUS "  Download: https://www.qcustomplot.com/release/2.1.1/QCustomPlot-source.tar.gz")
     message(STATUS "  Extract to: host/3rdparty/qcustomplot/")
 endif()
 

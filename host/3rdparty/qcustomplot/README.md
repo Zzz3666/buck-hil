@@ -11,8 +11,8 @@
 ## 获取方式
 
 ```bash
-# 下载最新版 (2.1.1 fixed)
-wget https://www.qcustomplot.com/release/2.1.1fixed/QCustomPlot-source.tar.gz
+# 下载最新版 (2.1.1)
+wget https://www.qcustomplot.com/release/2.1.1/QCustomPlot-source.tar.gz
 tar xzf QCustomPlot-source.tar.gz
 cp qcustomplot-source/qcustomplot.h qcustomplot-source/qcustomplot.cpp host/3rdparty/qcustomplot/
 ```
