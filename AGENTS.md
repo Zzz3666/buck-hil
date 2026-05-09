@@ -211,7 +211,7 @@ CMake: Qt6::Widgets + Qt6::Network + qcustomplot (静态链接)
 
 优先级：
 1. ~~`fpga/rtl/buck_solver.sv` + testbench~~ ✅ Verilator 仿真通过
-2. `fpga/rtl/pwm_capture.sv`
+2. ~~`fpga/rtl/pwm_capture.sv`~~ ✅ Verilator 仿真通过 (4 项全 PASS)
 3. `fpga/rtl/dac_interface.sv`
 4. `ps/src/` 固件
 5. `host/src/` 上位机
