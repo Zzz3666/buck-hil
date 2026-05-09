@@ -122,7 +122,7 @@ apply_bd_automation -rule xilinx.com:bd_rule:zynq_ultra_ps_e -config {
     pl_clk0 100
     pl_clk1 400
     num_fabric_resets 1
-}
+} [get_bd_cells $zynq]
 
 # --- 2. AXI Interconnect (GP0 → PL 寄存器) ---
 set axi_intercon [create_bd_cell -type ip -vlnv $axi_ic_vlnv axi_interconnect_0]
