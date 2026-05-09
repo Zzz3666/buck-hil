@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QByteArray>
 #include <cstdint>
+#include "protocol/Protocol.h"
 
 struct Frame {
     uint8_t    cmd = 0xFF;

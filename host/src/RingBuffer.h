@@ -10,7 +10,6 @@
 #pragma once
 #include <vector>
 #include <atomic>
-#include <span>
 #include <algorithm>
 #include <cstddef>
 
@@ -25,14 +24,19 @@ public:
     //=====================================================================
     // 追加数据块 (写线程调用)
     //=====================================================================
-    void append(std::span<const T> data)
+    void append(const std::vector<T> &data)
     {
         if (data.empty()) return;
         size_t len = data.size();
         if (len > m_capacity) {
             // 只保留最后 capacity 个元素
-            data = data.subspan(len - m_capacity);
+            const T *start = data.data() + (len - m_capacity);
             len = m_capacity;
+            // fall through to single-copy path below
+            size_t writeIdx = m_writePos.load(std::memory_order_relaxed) % m_capacity;
+            std::copy(start, start + len, m_buffer.begin() + static_cast<long>(writeIdx));
+            m_writePos.fetch_add(len, std::memory_order_release);
+            return;
         }
 
         size_t writeIdx = m_writePos.load(std::memory_order_relaxed) % m_capacity;

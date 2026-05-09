@@ -12,6 +12,8 @@
 #include <QTimer>
 #include <QLabel>
 #include <QPushButton>
+#include <QLineEdit>
+#include "FrameParser.h"
 
 // 前向声明
 class QCustomPlot;

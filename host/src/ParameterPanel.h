@@ -55,5 +55,7 @@ private:
     QPushButton *m_btnApplyRLoad;
     QPushButton *m_btnApplyVin;
     QPushButton *m_btnApplyFsw;
+    QPushButton *m_btnApplyRL;
+    QPushButton *m_btnApplyVf;
     QPushButton *m_btnReadAll;
 };
