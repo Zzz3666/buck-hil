@@ -207,10 +207,10 @@ CMake: Qt6::Widgets + Qt6::Network + qcustomplot (静态链接)
 
 ## TODO / 下一步
 
-当前阶段：架构设计完成，待进入代码实现。
+当前阶段：buck_solver 完成，待实现 pwm_capture。
 
 优先级：
-1. `fpga/rtl/buck_solver.sv` + testbench
+1. ~~`fpga/rtl/buck_solver.sv` + testbench~~ ✅ Verilator 仿真通过
 2. `fpga/rtl/pwm_capture.sv`
 3. `fpga/rtl/dac_interface.sv`
 4. `ps/src/` 固件

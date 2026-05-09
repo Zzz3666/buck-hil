@@ -255,35 +255,51 @@ Cycle 4: 钳位检查, 更新寄存器, 输出到 DAC 接口
 // 关键路径: DSP48 M-Reg → P-Reg, < 2ns @ ZU3EG speedgrade -1
 ```
 
-### 2.3.6 接口定义
+### 2.3.6 接口定义（实际实现）
 
 ```systemverilog
 module buck_solver #(
-    parameter IL_MAX = 32'h000A0000  // 10.0 A (Q16.16)
+    parameter int IL_MAX  = 32'h000A_0000,  // 10.0 A  in Q16.16
+    parameter int VIN_MAX = 32'h0019_0000,  // 25.0 V  in Q16.16
+    parameter int PERIOD  = 500,             // 100 MHz / 200 kHz = 500 cycles
+    parameter int STEP_DIV = 10             // solver step = clk / STEP_DIV (100ns steps)
 ) (
-    input  wire        clk,           // 100 MHz (clk_pl_100)
-    input  wire        rst_n,
+    input  logic        clk,           // 100 MHz
+    input  logic        rst_n,         // async, active low
 
-    // PWM 输入 (来自 pwm_capture, clk_pl_100 域)
-    input  wire [31:0] duty_q16_in,
-    input  wire        duty_valid_in,
+    input  logic [31:0] duty_q16_in,
+    input  logic        duty_valid_in,
 
-    // 参数输入 (来自 AXI 寄存器, 双缓冲)
-    input  wire [31:0] vin,
-    input  wire [31:0] l_val,         // dt/L 预计算值
-    input  wire [31:0] c_val,         // dt/C 预计算值
-    input  wire [31:0] r_load,
-    input  wire [31:0] r_l,
-    input  wire [31:0] vf,
-    input  wire        param_update,  // 参数更新脉冲（PWM 边界对齐）
+    input  logic [31:0] vin,           // Q16.16
+    input  logic [31:0] l_val,         // dt/L, Q8.24
+    input  logic [31:0] c_val,         // dt/C, Q8.24
+    input  logic [31:0] r_load,        // reserved, use inv_r_load instead
+    input  logic [31:0] inv_r_load,    // 1/R_load, Q16.16 — PS pre-computed (avoids division)
+    input  logic [31:0] r_l,           // inductor ESR, Q8.24
+    input  logic [31:0] vf,            // diode forward voltage, Q16.16
+    input  logic        param_update,   // single-cycle pulse
 
-    // 输出
-    output wire [31:0] v_out,         // Vout, Q16.16
-    output wire [31:0] i_l_out,       // I_L, Q16.16
-    output wire        pwm_active_out, // 当前开关状态（诊断用）
-    output wire        step_valid      // 每个求解步长后产生一个脉冲
+    output logic [31:0] v_out,         // Vout, Q16.16
+    output logic [31:0] i_l_out,       // IL,   Q16.16
+    output logic        pwm_active_out,
+    output logic        step_valid      // pulse every solver step (100ns)
 );
 ```
+
+### 2.3.7 实现要点
+
+- **STEP_DIV = 10**：求解器每 10 个时钟周期（100ns）产生一个输出，通过 step_counter + solve_tick 门控
+- **inv_r_load**：PS 端预计算 1/R_load (Q16.16)，PL 端用乘法替代 `v_C/R_load` 除法，节省 DSP/资源
+- **4 级流水线**：
+  - S0 → S1：锁存当前状态 + PWM 判决
+  - S1 → S2：计算 ΔV 项（i_L×R_L、Vout×inv_R_load）
+  - S2 → S3：乘 dt/L 和 dt/C，按 pwm_active 选择 ON/OFF 路径
+  - S3 → 输出：累加到状态 + 钳位 + 锁存输出
+- **钳位**：i_L ∈ [0, IL_MAX], v_C ∈ [0, vin_s]
+- **PWM 生成**：内部 pwm_counter 与 duty_threshold 比较，内部生成 pwm_active
+- **双缓冲**：参数在 param_update 脉冲时锁存到内部快照寄存器，与求解器步长对齐
+- Vout 测试精度：~300mV (含二极管损耗)，IL 测试精度：~50mA (vs 浮点参考模型)
+- Verilator 仿真通过：`verilator --cc --exe --build -Wall buck_solver.sv harness_solver.cpp`
 
 ### 2.3.7 PWM 生成 (内部)
 

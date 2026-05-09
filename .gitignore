@@ -65,6 +65,11 @@ Thumbs.db
 *.tar.gz
 *.7z
 
+# Verilator
+obj_dir/
+*.vcd
+*.vpd
+
 # Private
 .env
 secrets.*
