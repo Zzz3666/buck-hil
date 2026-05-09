@@ -63,7 +63,7 @@ buck-hil/
 │   ├── 5-host-application.md
 │   └── 6-hardware-interface.md
 ├── fpga/                           # PL 端 RTL（待实现）
-│   ├── rtl/   (pwm_capture.v, buck_solver.v, dac_interface.v, axi_mm_regs.v)
+│   ├── rtl/   (pwm_capture.sv, buck_solver.sv, dac_interface.sv, axi_mm_regs.sv)
 │   ├── constraints/ (zu3eg.xdc)
 │   └── tb/    (buck_solver_tb.sv)
 ├── ps/                             # PS 端固件（待实现）
@@ -180,13 +180,19 @@ CMake: Qt6::Widgets + Qt6::Network + qcustomplot (静态链接)
 
 ## 编码规范
 
-### Verilog/SystemVerilog
+### SystemVerilog (IEEE 1800-2017)
+- 文件扩展名: `.sv`
 - 模块名: `lower_snake_case`
 - 信号名: `lower_snake_case`
 - 参数: `UPPER_SNAKE_CASE`
 - 时钟: `clk` 或 `clk_<freq>`
 - 复位: `rst_n` (低有效)
+- **类型**: 统一使用 `logic`，禁止 `wire`/`reg` 混用
+- **过程块**: `always_ff` 用于时序逻辑，`always_comb` 用于组合逻辑，禁止裸 `always`
+- **状态机**: 使用 `enum` 定义状态，禁止裸 `localparam` 状态编码
 - 所有输出必须寄存器化
+- 跨时钟域信号必须经 `xpm_cdc_*` 或手工同步链
+- AXI 接口优先使用 `interface` 封装
 
 ### C (PS 固件)
 - C99, `snake_case` 函数名
@@ -204,8 +210,8 @@ CMake: Qt6::Widgets + Qt6::Network + qcustomplot (静态链接)
 当前阶段：架构设计完成，待进入代码实现。
 
 优先级：
-1. `fpga/rtl/buck_solver.v` + testbench
-2. `fpga/rtl/pwm_capture.v`
-3. `fpga/rtl/dac_interface.v`
+1. `fpga/rtl/buck_solver.sv` + testbench
+2. `fpga/rtl/pwm_capture.sv`
+3. `fpga/rtl/dac_interface.sv`
 4. `ps/src/` 固件
 5. `host/src/` 上位机

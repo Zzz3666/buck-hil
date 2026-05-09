@@ -84,10 +84,10 @@ buck-hil/
 │   └── 6-hardware-interface.md
 ├── fpga/                         # PL 端代码 (待实现)
 │   ├── rtl/
-│   │   ├── pwm_capture.v
-│   │   ├── buck_solver.v
-│   │   ├── dac_interface.v
-│   │   └── axi_mm_regs.v
+│   │   ├── pwm_capture.sv
+│   │   ├── buck_solver.sv
+│   │   ├── dac_interface.sv
+│   │   └── axi_mm_regs.sv
 │   ├── constraints/
 │   │   └── zu3eg.xdc
 │   └── tb/

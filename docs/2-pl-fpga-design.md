@@ -35,7 +35,7 @@
 
 ### 2.2.2 接口定义
 
-```verilog
+```systemverilog
 module pwm_capture #(
     parameter CLK_FREQ        = 400_000_000,         // 计数器时钟
     parameter DEBOUNCE_TICKS  = 2,                    // 5ns @ 400MHz = 2 ticks
@@ -95,7 +95,7 @@ module pwm_capture #(
 
 ### 2.2.4 毛刺滤波
 
-```verilog
+```systemverilog
 // 数字低通滤波: 信号必须稳定 DEBOUNCE_TICKS 个周期才被认为是有效边沿
 reg [DEBOUNCE_TICKS-1:0] pwm_sync_shift;
 reg                      pwm_filtered;
@@ -119,7 +119,7 @@ end
 
 ### 2.2.5 跨域输出 (clk_pl_400 → clk_pl_100)
 
-```verilog
+```systemverilog
 // 在 400MHz 域生成单周期 pulse
 // 在 100MHz 域用同步链 + 脉冲展宽捕获
 
@@ -186,7 +186,7 @@ end
 步长 Δt = 100ns = 0.1τ，前向欧拉误差 < 1%，满足仿真精度。
 
 **钳位保护**：
-```verilog
+```systemverilog
 // i_L 不能为负（MOSFET/二极管特性）
 if (i_L_next[31])  // 符号位 = 1, 即负数
     i_L_next = 32'h00000000;
@@ -219,7 +219,7 @@ if (i_L_next > IL_MAX)
 
 PS 端写入参数时，PL 端自动计算 `dt/L` 和 `dt/C`：
 
-```verilog
+```systemverilog
 // dt = 100ns = 1e-7 s
 // L 以 μH 存储 → L_si = L_reg * 1e-6
 // dt/L = 1e-7 / (L_reg * 1e-6) = 0.1 / L_reg
@@ -246,7 +246,7 @@ Cycle 4: 钳位检查, 更新寄存器, 输出到 DAC 接口
 
 如果后续需要更高吞吐（如多相），可将乘加流水线展开：
 
-```verilog
+```systemverilog
 // 流水线乘法器 (使用 DSP48)
 // Stage 1: 输入寄存器
 // Stage 2: 乘法
@@ -257,7 +257,7 @@ Cycle 4: 钳位检查, 更新寄存器, 输出到 DAC 接口
 
 ### 2.3.6 接口定义
 
-```verilog
+```systemverilog
 module buck_solver #(
     parameter IL_MAX = 32'h000A0000  // 10.0 A (Q16.16)
 ) (
@@ -289,7 +289,7 @@ module buck_solver #(
 
 求解器内部需要根据 `duty_q16` 生成自己的 PWM 信号（用于判断 SW=ON/OFF）：
 
-```verilog
+```systemverilog
 // 周期计数器：200kHz → 500 cycle @ 100MHz
 // 注：周期长度由 PS 配置的期望频率决定
 reg  [15:0] pwm_counter;
@@ -359,7 +359,7 @@ DAC80508 使用 32-bit SPI 帧，不同于 AD5686 的 24-bit：
 
 ### 2.4.3 模块接口
 
-```verilog
+```systemverilog
 module dac_interface #(
     parameter SPI_CLK_DIV = 2  // 100MHz / 2 = 50MHz SCLK
 ) (
@@ -432,7 +432,7 @@ Vout (0~12V) → DAC code (0~65535 → 0~5V):
   dac_scale_vout = (65535.0 / 5.0) 的 Q16.16  →  0x000CCCCC (≈ 13107)
   PL 端: dac_code = (v_out[31:16] * dac_scale) >> 16
 
-// Verilog:
+// SystemVerilog:
 wire [31:0] scale_product = v_out[31:16] * DAC_SCALE_REG;  // 16b × 16b = 32b
 wire [15:0] dac_code_vout = scale_product[31:16];           // 取高 16 位
 ```
@@ -464,7 +464,7 @@ wire [15:0] dac_code_vout = scale_product[31:16];           // 取高 16 位
 
 ### 2.5.2 接口
 
-```verilog
+```systemverilog
 module capture_manager #(
     parameter BUFFER_DEPTH = 8192,
     parameter PRE_TRIGGER  = 512,
