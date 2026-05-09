@@ -100,7 +100,6 @@ set axi_ic_vlnv   [get_ip_vlnv "axi_interconnect"  {2.1 2.0}]
 set axi_dma_vlnv  [get_ip_vlnv "axi_dma"           {7.1 7.0}]
 set proc_rst_vlnv [get_ip_vlnv "proc_sys_reset"    {5.0 4.0}]
 set util_buf_vlnv [get_ip_vlnv "util_ds_buf"       {2.2 2.1}]
-set xlconcat_vlnv [get_ip_vlnv "xlconcat"           {2.1 2.0}]
 
 puts "  Detected IP versions:"
 puts "    ZynqMP PS:      $zynq_vlnv"
@@ -111,28 +110,19 @@ puts "    Proc Sys Reset: $proc_rst_vlnv"
 # --- 1. Zynq UltraScale+ MPSoC ---
 set zynq [create_bd_cell -type ip -vlnv $zynq_vlnv zynq_ultra_ps_e]
 
-# 配置 PS:
-#   - 使能 PL 时钟 0: 100 MHz
-#   - 使能 PL 时钟 1: 400 MHz (LVDS)
+# 配置 PS (Vivado 2025.2 / 2024.1+ 使用 apply_bd_automation)
+#   - 使能 PL 时钟 0: 100 MHz, PL 时钟 1: 400 MHz
 #   - 使能 M_AXI_GP0 (AXI-Lite master → PL registers)
-#   - 使能 S_AXI_HP0 (AXI slave ← PL DMA)
-#   - 使能 GEM0 (Ethernet → lwIP)
-#   - 使能 UART0 (调试)
-#   - 使能 TTC0 (系统定时器)
-
-set_property -dict [list \
-    CONFIG.PSU__USE__M_AXI_GP0 {1} \
-    CONFIG.PSU__USE__S_AXI_HP0 {1} \
-    CONFIG.PSU__USE__M_AXI_GP1 {0} \
-    CONFIG.PSU__FPGA_PL0_ENABLE {1} \
-    CONFIG.PSU__CRL_APB__PL0_REF_CTRL__FREQMHZ {100} \
-    CONFIG.PSU__FPGA_PL1_ENABLE {1} \
-    CONFIG.PSU__CRL_APB__PL1_REF_CTRL__FREQMHZ {400} \
-    CONFIG.PSU__USE__UART0 {1} \
-    CONFIG.PSU__USE__M_AXI_GP0 {1} \
-    CONFIG.PSU__USE__S_AXI_HP0 {1} \
-    CONFIG.PSU__NUM_FABRIC_RESETS {1} \
-] [get_bd_cells $zynq]
+#   - 使能 S_AXI_HP0_FPD (AXI slave ← PL DMA)
+#   - 使能 GEM0 / UART0 / TTC0
+apply_bd_automation -rule xilinx.com:bd_rule:zynq_ultra_ps_e -config {
+    apply_board_preset 0
+    Master_M_AXI_GP0 1
+    Slave_S_AXI_HP0_FPD 1
+    pl_clk0 100
+    pl_clk1 400
+    num_fabric_resets 1
+}
 
 # --- 2. AXI Interconnect (GP0 → PL 寄存器) ---
 set axi_intercon [create_bd_cell -type ip -vlnv $axi_ic_vlnv axi_interconnect_0]
@@ -158,8 +148,8 @@ set rst_400 [create_bd_cell -type ip -vlnv $proc_rst_vlnv rst_400]
 # --- 5. Utility Buffer (LVDS clock input) ---
 set util_buf [create_bd_cell -type ip -vlnv $util_buf_vlnv util_ds_buf_0]
 
-# --- 6. Concat (interrupts) ---
-set concat [create_bd_cell -type ip -vlnv $xlconcat_vlnv xlconcat_0]
+# --- 6. Concat (interrupts) — Vivado 2025.2+ 使用 ilconcat
+set concat [create_bd_cell -type ip -vlnv xilinx.com:inline_hdl:ilconcat:1.0 ilconcat_0]
 set_property -dict [list CONFIG.NUM_PORTS {4}] $concat
 
 #=============================================================================
@@ -191,15 +181,13 @@ connect_bd_net [get_bd_pins $zynq/pl_resetn0] [get_bd_pins $rst_400/ext_reset_in
 #=============================================================================
 # GP0 → Interconnect
 connect_bd_intf_net [get_bd_intf_pins $zynq/M_AXI_GP0] [get_bd_intf_pins $axi_intercon/S00_AXI]
-# Intercon → PL 寄存器 (在顶层中的 buck_hil_top 处理)
-# DMA → HP0
-connect_bd_intf_net [get_bd_intf_pins $axi_dma/M_AXI_S2MM] [get_bd_intf_pins $zynq/S_AXI_HP0]
+# DMA → HP0_FPD (2025.2 interface name for S_AXI_HP0)
+connect_bd_intf_net [get_bd_intf_pins $axi_dma/M_AXI_S2MM] [get_bd_intf_pins $zynq/S_AXI_HP0_FPD]
 
 #=============================================================================
 # 连接中断
 #=============================================================================
 connect_bd_net [get_bd_pins $axi_dma/s2mm_introut] [get_bd_pins $concat/In0]
-# 其余中断引脚接地
 connect_bd_net [get_bd_pins $concat/dout] [get_bd_pins $zynq/pl_ps_irq0]
 
 #=============================================================================
