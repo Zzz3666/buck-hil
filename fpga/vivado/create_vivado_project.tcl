@@ -87,7 +87,7 @@ proc get_ip_vlnv {ip_name fallback_list} {
 
     if {[llength $matches] > 0} {
         set vlnv [lindex $matches end]
-        puts "    [Detected] $vlnv"
+        puts "    (catalog) $vlnv"
         return $vlnv
     }
 
@@ -97,7 +97,7 @@ proc get_ip_vlnv {ip_name fallback_list} {
         if {[catch {create_bd_cell -type ip -vlnv $test_vlnv "${ip_name}_test"}] == 0} {
             # 成功 → 删除测试 cell 并返回
             remove_bd_cell [get_bd_cells "${ip_name}_test"] -quiet
-            puts "    [Fallback]  $test_vlnv"
+            puts "    (fallback) $test_vlnv"
             return $test_vlnv
         }
     }
