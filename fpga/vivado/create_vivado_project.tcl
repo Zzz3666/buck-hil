@@ -16,7 +16,7 @@ set constraints_dir "[file dirname [info script]]/../constraints"
 set tb_dir          "[file dirname [info script]]/../tb"
 
 # ---- 目标器件 ----
-set part_name       "xczu3eg-sfvc784-1-i"
+set part_name       "xczu3eg-sfvc784-1-e"
 set board_part      ""  ;# 如有开发板, 填 Xilinx 板卡名称
 
 # ---- 清理旧工程 ----

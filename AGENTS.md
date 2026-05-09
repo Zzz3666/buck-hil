@@ -17,7 +17,7 @@
 | 功率 | 2W | 用户指定 |
 | 开关频率 | 200 kHz | 用户指定 |
 | 仿真步长 | 100 ns | 设计决策（开关周期 1/50） |
-| FPGA | Xilinx ZU3EG (XCZU3EG-1SFVC784I) | 用户已有硬件 |
+| FPGA | Xilinx ZU3EG (XCZU3EG-1SFVC784E) | 用户已有硬件 |
 | DAC | DAC80508 (16-bit, 8-ch, SPI 32-bit, 0~5V out, ±1LSB INL, 5μs settling) | 设计选型 (替换 AD5686) |
 | 模型类型 | 开关状态模型 (Switched-State, 非平均值) | 设计决策 |
 | 离散化 | 前向欧拉 | 设计决策（100ns 步长下误差 < 0.1%） |
