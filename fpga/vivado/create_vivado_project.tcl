@@ -74,14 +74,11 @@ puts "Creating Block Design..."
 
 create_bd_design "system"
 
-# ---- IP 版本自动探测 (带常见版本回退) ----
-# 不同 Vivado 版本 IP VLNV 版本号不同。
-# 策略: 先查询 IP catalog → 查不到则用常见版本列表匹配
+# ---- IP 版本自动探测 ----
+# 策略: 查询 IP catalog → 查不到则用列表第一个版本（该 Vivado 大概率匹配）
 proc get_ip_vlnv {ip_name fallback_list} {
-    # 尝试刷新 catalog
     catch { update_ip_catalog -quiet -repo_paths {} }
 
-    # 尝试查询
     set matches {}
     catch { set matches [get_ipdefs -filter "VLNV =~ \"xilinx.com:ip:${ip_name}:*\""] }
 
@@ -91,20 +88,13 @@ proc get_ip_vlnv {ip_name fallback_list} {
         return $vlnv
     }
 
-    # 回退: 遍历已知版本列表，用 create_bd_cell 测试
-    foreach ver $fallback_list {
-        set test_vlnv "xilinx.com:ip:${ip_name}:${ver}"
-        if {[catch {create_bd_cell -type ip -vlnv $test_vlnv "${ip_name}_test"}] == 0} {
-            # 成功 → 删除测试 cell 并返回
-            remove_bd_cell [get_bd_cells "${ip_name}_test"] -quiet
-            puts "    (fallback) $test_vlnv"
-            return $test_vlnv
-        }
-    }
-    error "IP not found: xilinx.com:ip:${ip_name}:*. Check Vivado IP catalog."
+    # catalog 未加载 → 用预置版本（大概率正确，错误会在 create_bd_cell 时报具体版本号）
+    set vlnv "xilinx.com:ip:${ip_name}:[lindex $fallback_list 0]"
+    puts "    (default)  $vlnv"
+    return $vlnv
 }
 
-# 已知版本列表 (从新到旧, 覆盖 Vivado 2020.2 ~ 2024.2)
+# 版本列表: 第一个 = 最可能匹配的默认值
 set zynq_vlnv    [get_ip_vlnv "zynq_ultra_ps_e"  {3.5 3.4 3.3 3.2}]
 set axi_ic_vlnv   [get_ip_vlnv "axi_interconnect"  {2.1 2.0}]
 set axi_dma_vlnv  [get_ip_vlnv "axi_dma"           {7.1 7.0}]
