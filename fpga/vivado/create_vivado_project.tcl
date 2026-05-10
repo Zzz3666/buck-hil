@@ -213,9 +213,36 @@ if {$zynq_s_axi ne ""} {
 
 #=============================================================================
 # 连接中断
+# Vivado 2025.2: ilconcat dout → dout[3:0], PS pl_ps_irq0 → pl_ps_irq[0:0]
+# 使用自动发现避免版本间 pin 名变化
 #=============================================================================
-connect_bd_net [get_bd_pins $axi_dma/s2mm_introut] [get_bd_pins $concat/In0]
-connect_bd_net [get_bd_pins $concat/dout] [get_bd_pins $zynq/pl_ps_irq0]
+puts "  Interrupt pins:"
+
+# 发现 concat 的输入/输出 pin
+set concat_in0 ""; set concat_dout ""
+foreach pin [get_bd_pins -of_objects $concat] {
+    puts "    concat: $pin"
+    if {[string match "*In0*" $pin]}   { set concat_in0 $pin }
+    if {[string match "*dout*" $pin]}  { set concat_dout $pin }
+}
+if {$concat_in0 eq "" || $concat_dout eq ""} {
+    puts "  ERROR: Cannot find concat In0/dout pins!"; exit 1
+}
+
+# 发现 PS 中断输入 pin
+set zynq_irq ""
+foreach pin [get_bd_pins -of_objects $zynq -filter {DIR == I}] {
+    if {[string match -nocase "*irq*" $pin]} { set zynq_irq $pin; puts "    zynq: $pin" }
+}
+if {$zynq_irq eq ""} {
+    puts "  ERROR: No IRQ input pin found on PS!"; exit 1
+}
+
+# DMA s2mm_introut → concat In0
+set dma_intr [get_bd_pins $axi_dma/s2mm_introut]
+connect_bd_net [get_bd_pins $dma_intr] [get_bd_pins $concat_in0]
+# concat dout → PS IRQ
+connect_bd_net [get_bd_pins $concat_dout] [get_bd_pins $zynq_irq]
 
 #=============================================================================
 # 创建 HDL Wrapper 并关联顶层
