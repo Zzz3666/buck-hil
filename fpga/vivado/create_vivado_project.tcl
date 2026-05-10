@@ -111,18 +111,21 @@ puts "    Proc Sys Reset: $proc_rst_vlnv"
 # --- 1. Zynq UltraScale+ MPSoC ---
 set zynq [create_bd_cell -type ip -vlnv $zynq_vlnv zynq_ultra_ps_e]
 
-# 配置 PS (Vivado 2025.2 / 2024.1+ 使用显式 PCW 属性, 比 apply_bd_automation 可靠)
+# 配置 PS (Vivado 2025.2 apply_bd_automation, 仅移除不可靠的 pl_clk1)
 #   - 使能 PL 时钟 0: 100 MHz (solve 域)
 #   - 400 MHz capture 域由 MMCM (clk_wiz_0) 从 pl_clk0 倍频生成
 #   - 使能 M_AXI_GP0 (AXI-Lite master → PL registers)
-#   - 使能 S_AXI_HP0 (AXI slave ← PL DMA)
-set_property -dict [list \
-    CONFIG.PCW_USE_M_AXI_GP0 {1} \
-    CONFIG.PCW_USE_S_AXI_HP0 {1} \
-] $zynq
+#   - 使能 S_AXI_HP0_FPD (AXI slave ← PL DMA)
+apply_bd_automation -rule xilinx.com:bd_rule:zynq_ultra_ps_e -config {
+    apply_board_preset 0
+    Master_M_AXI_GP0 1
+    Slave_S_AXI_HP0_FPD 1
+    pl_clk0 100
+    num_fabric_resets 1
+} [get_bd_cells $zynq]
 
 # 验证 PS 接口是否成功使能
-puts "  PS interfaces available:"
+puts "  PS interfaces:"
 foreach pin [get_bd_intf_pins -of_objects $zynq] {
     puts "    $pin"
 }
