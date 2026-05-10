@@ -149,7 +149,7 @@ set rst_400 [create_bd_cell -type ip -vlnv $proc_rst_vlnv rst_400]
 set util_buf [create_bd_cell -type ip -vlnv $util_buf_vlnv util_ds_buf_0]
 
 # --- 6. Concat (interrupts) — Vivado 2025.2+ 使用 ilconcat
-set concat [create_bd_cell -type ip -vlnv xilinx.com:inline_hdl:ilconcat:1.0 ilconcat_0]
+set concat [create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconcat:1.0 ilconcat_0]
 set_property -dict [list CONFIG.NUM_PORTS {4}] $concat
 
 #=============================================================================
