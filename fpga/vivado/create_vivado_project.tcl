@@ -100,6 +100,7 @@ set axi_ic_vlnv   [get_ip_vlnv "axi_interconnect"  {2.1 2.0}]
 set axi_dma_vlnv  [get_ip_vlnv "axi_dma"           {7.1 7.0}]
 set proc_rst_vlnv [get_ip_vlnv "proc_sys_reset"    {5.0 4.0}]
 set util_buf_vlnv [get_ip_vlnv "util_ds_buf"       {2.2 2.1}]
+set clk_wiz_vlnv  [get_ip_vlnv "clk_wiz"           {6.0 5.4 5.1}]
 
 puts "  Detected IP versions:"
 puts "    ZynqMP PS:      $zynq_vlnv"
@@ -111,7 +112,8 @@ puts "    Proc Sys Reset: $proc_rst_vlnv"
 set zynq [create_bd_cell -type ip -vlnv $zynq_vlnv zynq_ultra_ps_e]
 
 # 配置 PS (Vivado 2025.2 / 2024.1+ 使用 apply_bd_automation)
-#   - 使能 PL 时钟 0: 100 MHz, PL 时钟 1: 400 MHz
+#   - 使能 PL 时钟 0: 100 MHz (solve 域)
+#   - 400 MHz capture 域由 MMCM (clk_wiz_0) 从 pl_clk0 倍频生成
 #   - 使能 M_AXI_GP0 (AXI-Lite master → PL registers)
 #   - 使能 S_AXI_HP0_FPD (AXI slave ← PL DMA)
 #   - 使能 GEM0 / UART0 / TTC0
@@ -120,7 +122,6 @@ apply_bd_automation -rule xilinx.com:bd_rule:zynq_ultra_ps_e -config {
     Master_M_AXI_GP0 1
     Slave_S_AXI_HP0_FPD 1
     pl_clk0 100
-    pl_clk1 400
     num_fabric_resets 1
 } [get_bd_cells $zynq]
 
@@ -148,6 +149,16 @@ set rst_400 [create_bd_cell -type ip -vlnv $proc_rst_vlnv rst_400]
 # --- 5. Utility Buffer (LVDS clock input) ---
 set util_buf [create_bd_cell -type ip -vlnv $util_buf_vlnv util_ds_buf_0]
 
+# --- 5b. Clocking Wizard (100MHz → 400MHz for capture domain) ---
+#      ZU+ PS pl_clk1 不保证可用, 用 MMCM 从 pl_clk0 倍频
+set clk_wiz [create_bd_cell -type ip -vlnv $clk_wiz_vlnv clk_wiz_0]
+set_property -dict [list \
+    CONFIG.PRIM_IN_FREQ  {100.000} \
+    CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {400.000} \
+    CONFIG.USE_LOCKED {true} \
+    CONFIG.USE_RESET  {false} \
+] $clk_wiz
+
 # --- 6. Concat (interrupts) — Vivado 2025.2+ 使用 ilconcat
 set concat [create_bd_cell -type inline_hdl -vlnv xilinx.com:inline_hdl:ilconcat:1.0 ilconcat_0]
 set_property -dict [list CONFIG.NUM_PORTS {4}] $concat
@@ -163,7 +174,10 @@ connect_bd_net [get_bd_pins $zynq/pl_clk0] [get_bd_pins $axi_intercon/S00_ACLK]
 connect_bd_net [get_bd_pins $zynq/pl_clk0] [get_bd_pins $axi_dma/s_axi_lite_aclk]
 connect_bd_net [get_bd_pins $zynq/pl_clk0] [get_bd_pins $axi_dma/m_axi_s2mm_aclk]
 
-connect_bd_net [get_bd_pins $zynq/pl_clk1] [get_bd_pins $rst_400/slowest_sync_clk]
+# MMCM 输入: pl_clk0 (100MHz)
+connect_bd_net [get_bd_pins $zynq/pl_clk0] [get_bd_pins $clk_wiz/clk_in1]
+# 400MHz capture clock → rst_400
+connect_bd_net [get_bd_pins $clk_wiz/clk_out1] [get_bd_pins $rst_400/slowest_sync_clk]
 
 #=============================================================================
 # 连接复位
