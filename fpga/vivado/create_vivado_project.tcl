@@ -124,11 +124,17 @@ apply_bd_automation -rule xilinx.com:bd_rule:zynq_ultra_ps_e -config {
     num_fabric_resets 1
 } [get_bd_cells $zynq]
 
-# 验证 PS 接口是否成功使能
+# 验证 PS 接口并自动发现 AXI 总线 pin 名
+# Vivado 2025.2 命名: M_AXI_HPM0_FPD, S_AXI_HP0_FPD (非 M_AXI_GP0, S_AXI_HP0)
 puts "  PS interfaces:"
+set zynq_m_axi ""; set zynq_s_axi ""
 foreach pin [get_bd_intf_pins -of_objects $zynq] {
     puts "    $pin"
+    if {[string match "*M_AXI*" $pin]} { set zynq_m_axi $pin }
+    if {[string match "*S_AXI*"  $pin]} { set zynq_s_axi $pin }
 }
+if {$zynq_m_axi eq ""} { puts "  ERROR: No M_AXI interface found on PS!"; exit 1 }
+if {$zynq_s_axi eq ""}  { puts "  WARN:  No S_AXI interface found on PS (DMA may not work)" }
 
 # --- 2. AXI Interconnect (GP0 → PL 寄存器) ---
 set axi_intercon [create_bd_cell -type ip -vlnv $axi_ic_vlnv axi_interconnect_0]
@@ -198,10 +204,12 @@ connect_bd_net [get_bd_pins $zynq/pl_resetn0] [get_bd_pins $rst_400/ext_reset_in
 #=============================================================================
 # 连接 AXI 总线
 #=============================================================================
-# GP0 → Interconnect
-connect_bd_intf_net [get_bd_intf_pins $zynq/M_AXI_GP0] [get_bd_intf_pins $axi_intercon/S00_AXI]
-# DMA → HP0_FPD (2025.2 interface name for S_AXI_HP0)
-connect_bd_intf_net [get_bd_intf_pins $axi_dma/M_AXI_S2MM] [get_bd_intf_pins $zynq/S_AXI_HP0_FPD]
+# GP0/HPM0 → Interconnect (使用自动发现的 pin 名)
+connect_bd_intf_net [get_bd_intf_pins $zynq_m_axi] [get_bd_intf_pins $axi_intercon/S00_AXI]
+# DMA → HP0_FPD (使用自动发现的 pin 名)
+if {$zynq_s_axi ne ""} {
+    connect_bd_intf_net [get_bd_intf_pins $axi_dma/M_AXI_S2MM] [get_bd_intf_pins $zynq_s_axi]
+}
 
 #=============================================================================
 # 连接中断
