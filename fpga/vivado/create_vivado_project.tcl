@@ -230,12 +230,25 @@ if {$concat_in0 eq "" || $concat_dout eq ""} {
 }
 
 # 发现 PS 中断输入 pin
+# Vivado 2025.2: pl_ps_irq 是 bus pin (width 1), -filter {DIR == I} 对其无效
 set zynq_irq ""
-foreach pin [get_bd_pins -of_objects $zynq -filter {DIR == I}] {
+# 策略 1: 无 DIR 过滤，匹配所有含 "irq" 的 pin（含 bus pin）
+foreach pin [get_bd_pins -of_objects $zynq] {
     if {[string match -nocase "*irq*" $pin]} { set zynq_irq $pin; puts "    zynq: $pin" }
 }
+# 策略 2: 兜底 — 显式 bus 索引（Vivado 2025.2 常见命名）
 if {$zynq_irq eq ""} {
-    puts "  ERROR: No IRQ input pin found on PS!"; exit 1
+    if {[catch { set zynq_irq [get_bd_pins $zynq/pl_ps_irq] } err]} {
+        puts "    WARN: pl_ps_irq not found either"
+    } else {
+        puts "    zynq: $zynq_irq (fallback)"
+    }
+}
+if {$zynq_irq eq ""} {
+    puts "  ERROR: No IRQ input pin found on PS! Tried all strategies."
+    puts "  Dump all Zynq pins for debugging:"
+    foreach pin [get_bd_pins -of_objects $zynq] { puts "    $pin" }
+    exit 1
 }
 
 # DMA s2mm_introut → concat In0
